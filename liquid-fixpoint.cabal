@@ -110,7 +110,8 @@ Library
                    Language.Fixpoint.Solver.Instantiate,
                    Language.Fixpoint.Solver.Sanitize,
                    Language.Fixpoint.Utils.Statistics,
-                   Language.Fixpoint.Solver.Solve
+                   Language.Fixpoint.Solver.Solve,
+                   Language.Fixpoint.Musfix.Serialize
 
   Build-Depends: base >=4.8.1.0 && <5
                , array

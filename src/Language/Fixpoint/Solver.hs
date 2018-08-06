@@ -47,6 +47,9 @@ import           Language.Fixpoint.Minimize (minQuery, minQuals, minKvars)
 import           Language.Fixpoint.Solver.Instantiate (instantiate)
 import           Control.DeepSeq
 
+-- Musfix export
+import           Language.Fixpoint.Musfix.Serialize
+
 ---------------------------------------------------------------------------
 -- | Solve an .fq file ----------------------------------------------------
 ---------------------------------------------------------------------------
@@ -210,6 +213,8 @@ solveNative' !cfg !fi0 = do
   res <- {-# SCC "Sol.solve" #-} Sol.solve cfg $!! si6
   -- rnf soln `seq` donePhase Loud "Solve2"
   --let stat = resStatus res
+  -- TODO: clean up super hacky export of (our?) SMT2
+  putStrLn $ convertToMusFix si6
   saveSolution cfg res
   -- when (save cfg) $ saveSolution cfg
   -- writeLoud $ "\nSolution:\n"  ++ showpp (resSolution res)
