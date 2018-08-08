@@ -214,7 +214,9 @@ solveNative' !cfg !fi0 = do
   -- rnf soln `seq` donePhase Loud "Solve2"
   --let stat = resStatus res
   -- TODO: clean up super hacky export of (our?) SMT2
-  putStrLn $ convertToMusFix si6
+  let musfixOutput = convertToMusFix si6
+  putStrLn musfixOutput
+  writeFile "lqfp2musfix.smt2" musfixOutput
   saveSolution cfg res
   -- when (save cfg) $ saveSolution cfg
   -- writeLoud $ "\nSolution:\n"  ++ showpp (resSolution res)
