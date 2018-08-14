@@ -12,175 +12,188 @@ module Language.Fixpoint.Musfix.Serialize (
   ) where
   
 import Language.Fixpoint.Types
+import Language.Fixpoint.Musfix.Util
 
-import Data.Semigroup
+import Data.Function
+import Data.List
 import Data.Text.Format
 import Data.Text.Lazy.Builder (Builder)
 import qualified Data.HashMap.Strict    as M
-import qualified Data.Text.Lazy as LT
+import qualified Data.Text.Lazy         as LT
 import qualified Data.Text.Lazy.Builder as Builder
+import qualified Data.List              as L
 
+
+-- | Converts the given SInfo object into a MUSFix compatible string
 convertToMusFix :: SInfo a -> String
 convertToMusFix si = (LT.unpack (Builder.toLazyText (musfixFromInfo si)))
 
-safeVar :: Symbol -> String
-safeVar s = "var_" ++ (symbolString s)
-
-class MusfixExport a where
-  -- | Produces a lazy text builder for the given type in musfix format
-  musfix :: a -> Builder
-  
-{- File types -}
+-- | Produce a lazy-text builder from the given SInfo
 musfixFromInfo :: SInfo a -> Builder
-musfixFromInfo si = build t (qs, wfs, horns)
+musfixFromInfo si = build txt (qs, wfs, cs)
     where
-      t = ";Qualifiers\n{}\n\n;Well-formedness constraints\n{}\n\n;Constraints\n{}"
-      qs :: Builder
-      qs = foldl (<>) "" $ map musfix (quals si)
-      wfs :: Builder
-      wfs = foldl (<>) "" $ map musfix (M.toList (ws si))
-      horns :: Builder
-      horns = foldl (<>) "" $ map musfix (map prependBindEnv (M.toList (cm si)))
-      prependBindEnv (k, v) = (bs si, k, v)
-      
-{- Constraint types -}
-instance MusfixExport Qualifier where
-  musfix q = build "(qualif {} ({}) {})\n" (name, varList, predicate)
-    where
-      name      = musfix $ qName q
-      vars      = map musfix $ qParams q
-      varList   = foldl (<>) "" vars
-      predicate = musfix $ qBody q
-      
-instance MusfixExport QualParam where
-  musfix p = build "({} {})" (name, sort)
-    where
-      name      = safeVar $ qpSym p
-      sort      = musfix $ qpSort p
-      
-instance MusfixExport (KVar, WfC a) where
-  musfix (k, wf) = build "(wf ${} {})\n" (symbolSafeText . kv $ k, var)
-    where
-      var :: Builder
-      var = build "(({} {}))" (safeVar v, musfix s)
-      (v, s, _) = wrft wf
+      env = ConvertEnv {
+              ceSInfo = si,
+              ceSubs = M.empty,
+              cePrettyVars = M.empty
+            }
+      txt = "; Qualifiers\n{}\n\n; Well-formedness constraints\n{}\n\n; Horn constraints\n{}"
+      qs  = concatBuilders $ map (musfix env) (quals si)
+      wfs = concatBuilders $ map (musfix env) (M.toList (ws si))
+      cs  = concatBuilders $ map (musfix env) (M.toList (cm si))
+
+-- | Environment for conversion
+data ConvertEnv a = ConvertEnv {
+  ceSInfo :: SInfo a,                           -- ^ The file info
+  ceSubs :: (M.HashMap Symbol Symbol),          -- ^ Variable substitutions to perform
+  cePrettyVars :: (M.HashMap Symbol Symbol)     -- ^ Pretty names for known variables
+  } deriving (Show)
+
+-- | Gets the proper output name of a variable
+safeVar :: ConvertEnv a -> Symbol -> String
+safeVar env s = name
+  where
+    subs = M.lookupDefault s s $ ceSubs env
+    name = adjustName $ symbolString subs
+    adjustName str
+      | Just suffix <- L.stripPrefix "VV##" str       = "v" ++ suffix
+      | Just suffix <- L.stripPrefix "lq_karg$" str   = mid suffix
+      | otherwise                                     = str
+      where
+        mid xs = takeWhile isNotDelimiter xs
+        isNotDelimiter '#' = False
+        isNotDelimiter _   = True
   
-instance MusfixExport (BindEnv, SubcId, (SimpC a)) where
-  musfix (binds, _, c) = build "(constraint (forall ({}) (=> {} {})))\n" (vars, lhs, musfix $ crhs c)
+class MusfixExport x where
+  -- | Produces a lazy text builder for the given type in musfix format
+  musfix :: ConvertEnv a -> x -> Builder
+
+{- Constraint types -}
+
+-- | Builds qualifier
+instance MusfixExport Qualifier where
+  musfix env q = build "(qualif {} ({}) {})\n" (name, vars, body)
     where
-      vars :: Builder
-      vars = foldl (<>) "" $ map sortedVar (clhs binds c)
+      name = musfix env $ qName q
+      vars = concatBuilders $ map (musfix env) (qParams q)
+      body = musfix env $ qBody q
+
+-- | Build qualifier parameter
+instance MusfixExport QualParam where
+  musfix env p = build "({} {})" (name, sort)
+    where
+      name = safeVar env $ qpSym p
+      sort = musfix env $ qpSort p
+    
+-- | Build well-formedness constraint
+instance MusfixExport (KVar, WfC a) where
+  musfix env (k, wf) = build "(wf ${} ({}))\n" (symbolSafeText . kv $ k, vars)
+    where
+      vars        = concatBuilders $ map svar domain
+      fmlSort     = sortBy (compare `on` fst)
+      domain      = fmlSort $ sortedDomain ((bs . ceSInfo) env) wf
+      svar (n, s) = build "({} {})" (safeVar env n, musfix env s)
+  
+-- | Build horn constraint
+instance MusfixExport (SubcId, (SimpC a)) where
+  musfix env (_, c) = build "(constraint (forall ({}) (=> {} {})))\n" (vars, lhs, musfix env $ crhs c)
+    where
+      binds = bs $ ceSInfo env
+      vars = concatBuilders $ map sortedVar (clhs binds c)
       sortedVar :: (Symbol, SortedReft) -> Builder
-      sortedVar (s, sreft) = build "({} {})" (s', musfix $ sr_sort sreft)
+      sortedVar (s, sreft) = build "({} {})" (s', musfix env $ sr_sort sreft)
         where
-          s' = safeVar s
+          s' = safeVar env s
       
       lhs :: Builder
       lhs = combinedRefts $ clhs binds c
       -- | Combines all the lhs refinements into one and'd expression
       combinedRefts :: [(Symbol, SortedReft)] -> Builder
-      combinedRefts xs = musfix e
+      combinedRefts xs = musfix env e
         where
           e = PAnd $ map expr xs
           expr :: (Symbol, SortedReft) -> Expr
           expr (_, sreft) = e'
             where
               Reft (_, e') = sr_reft sreft
-      
-      
-instance MusfixExport (Symbol, SortedReft) where
-  musfix (_, reft) = musfix $ sr_reft reft
-  
-instance MusfixExport Reft where
-  musfix (Reft (_, e)) = musfix e
-      
+
 {- Expressions -}
+
 instance MusfixExport Symbol where
-  musfix = symbolBuilder
+  musfix _                = symbolBuilder
   
 instance MusfixExport Sort where
-  musfix s = r
-    where
-      r :: Builder
-      r = case s of
-          FInt    -> "Int"
-          FVar n  -> build "@{}" (Only n)
-          _       -> build "unknown [given {}]" (Only $ show s)
+  musfix _    FInt             = "Int"
+  musfix _    (FVar n)         = build "@a{}" (Only n)
+  musfix env  (FApp s s')      = build "{} {}" (musfix env s, musfix env s')
+  musfix env  (FTC f)          = musfix env $ symbol f
+  musfix _    s                = build "unknown [given {}]" (Only $ show s)
           
 instance MusfixExport SymConst where
-  musfix (SL t) = build "{}" (Only t)
+  musfix _    (SL t)           = build "{}" (Only t)
 
 instance MusfixExport Constant where
-  musfix (I i)    = build "{}" (Only i)
-  musfix (R d)    = build "{}" (Only d)
-  musfix (L t _ ) = build "{}" (Only t)
+  musfix _    (I i)            = build "{}" (Only i)
+  musfix _    (R d)            = build "{}" (Only d)
+  musfix _    (L t _ )         = build "{}" (Only t)
   
 instance MusfixExport Bop where
-  musfix Plus     = "+"
-  musfix Minus    = "-"
-  musfix Times    = "*"
-  musfix Div      = "/"
-  musfix RTimes   = "*"
-  musfix RDiv     = "/"
-  musfix Mod      = "mod"
---  musfix op       = build "unknown bop [given {}]" (Only $ show op)
-
-instance MusfixExport Brel where
-  musfix Eq    = "="
-  musfix Ueq   = "="
-  musfix Gt    = ">"
-  musfix Ge    = ">="
-  musfix Lt    = "<"
-  musfix Le    = "<="
-  musfix _     = error "export Brel: unknown"
+  musfix _    Plus             = "+"
+  musfix _    Minus            = "-"
+  musfix _    Times            = "*"
+  musfix _    Div              = "/"
+  musfix _    RTimes           = "*"
+  musfix _    RDiv             = "/"
+  musfix _    Mod              = "mod"
   
-instance MusfixExport [Expr] where
-  musfix es       = foldl (<>) "" $ map musfix es
+instance MusfixExport Brel where
+  musfix _    Eq               = "="
+  musfix _    Ueq              = "="
+  musfix _    Gt               = ">"
+  musfix _    Ge               = ">="
+  musfix _    Lt               = "<"
+  musfix _    Le               = "<="
+  musfix _    _                = error "export Brel: unknown"
 
 instance MusfixExport Expr where
-  musfix (ESym z)         = musfix z
-  musfix (ECon c)         = musfix c
-  musfix (EVar s)         = build "{}" (Only $ safeVar s)
-  musfix (EApp f a)       = build "({} {})" (musfix f, musfix a)
-  musfix (ENeg e)         = build "(- {})" (Only $ musfix e)
-  musfix (EBin o l r)     = build "({} {} {})" (musfix o, musfix l, musfix r)
-  musfix (EIte c t e)     = build "(ite {} {} {})" (musfix c, musfix t, musfix e)
-  musfix (ECst e _)       = build "{}" (Only $ musfix e)
-  musfix PTrue            = "True"
-  musfix PFalse           = "False"
-  musfix (PAnd [])        = "True"
-  musfix (PAnd ps)        = mkAndOrs "and" ps
-  musfix (POr [])         = "False"
-  musfix (POr ps)         = mkAndOrs "or" ps
-  musfix (PNot p)         = build "(not {})"   (Only $ musfix p)
-  musfix (PImp p q)       = build "(=> {} {})" (musfix p, musfix q)
-  musfix (PIff p q)       = build "(= {} {})"  (musfix p, musfix q)
-  musfix (PAtom r e1 e2)  = mkRel r e1 e2
-  musfix (PKVar k s)      = mkKVar k s
-  musfix e                = build "unsupported expression [{}]" (Only $ show e)
+  musfix env  (ESym z)         = musfix env z
+  musfix env  (ECon c)         = musfix env c
+  musfix env  (EVar s)         = build "{}" (Only $ safeVar env s)
+  musfix env  (EApp f a)       = build "({} {})" (musfix env f, musfix env a)
+  musfix env  (ENeg e)         = build "(- {})" (Only $ musfix env e)
+  musfix env  (EBin o l r)     = build "({} {} {})" (musfix env o, musfix env l, musfix env r)
+  musfix env  (EIte c t e)     = build "(ite {} {} {})" (musfix env c, musfix env t, musfix env e)
+  musfix env  (ECst p _)       = build "{}" (Only $ musfix env p)
+  musfix _    PTrue            = "True"
+  musfix _    PFalse           = "False"
+  musfix _    (PAnd [])        = "True"
+  musfix env  (PAnd ps)        = mkAndOrs env "and" ps
+  musfix _    (POr [])         = "False"
+  musfix env  (POr ps)         = mkAndOrs env "or" ps
+  musfix env  (PNot p)         = build "(not {})"   (Only $ musfix env p)
+  musfix env  (PImp p q)       = build "(=> {} {})" (musfix env p, musfix env q)
+  musfix env  (PIff p q)       = build "(= {} {})"  (musfix env p, musfix env q)
+  musfix env  (PKVar k s)      = mkKVar env k s
+  musfix env  (PAtom r e1 e2)  = mkRel env r e1 e2
+  musfix _    e                = build "unsupported expression [{}]" (Only $ show e)
   
-mkAndOrs :: LT.Text -> [Expr] -> Builder
-mkAndOrs _ [p]            = musfix p
-mkAndOrs op (p1:p2:ps)    = build "({} {} {})" (op, musfix p1, mkAndOrs op (p2:ps))
-mkAndOrs op _             = build "(empty {})" (Only op)
+mkAndOrs :: ConvertEnv a -> LT.Text -> [Expr] -> Builder
+mkAndOrs env _ [p]            = musfix env p
+mkAndOrs env op (p1:p2:ps)    = build "({} {} {})" (op, musfix env p1, mkAndOrs env op (p2:ps))
+mkAndOrs _   op _             = build "(empty {})" (Only op)
 
-mkKVar :: KVar -> Subst -> Builder
-mkKVar k subst = build "(${} {})"    (symbolSafeText . kv $ k, args)
+mkKVar :: ConvertEnv a -> KVar -> Subst -> Builder
+mkKVar env k subst = build "(${} {})"    (symbolSafeText . kv $ k, args)
   where
     (Su m) = subst
-    -- TODO: This will not be ordered right!
-    args :: Builder
-    args = case foldl space Nothing $ map musfix (M.elems m) of
-      Nothing -> ""
-      Just as -> as
-    space Nothing  r = Just $ build "{}" (Only r)
-    space (Just l) r = Just $ build "{} {}" (l, r)
+    argSort = sortBy (compare `on` fst)
+    args = concatBuildersS " " $ map ((musfix env) . snd) (argSort (M.toList m))
   
-mkRel :: Brel -> Expr -> Expr -> Builder
-mkRel Ne  e1 e2 = mkNe e1 e2
-mkRel Une e1 e2 = mkNe e1 e2
-mkRel r   e1 e2 = build "({} {} {})" (musfix r, musfix e1, musfix e2)
+mkRel :: ConvertEnv a -> Brel -> Expr -> Expr -> Builder
+mkRel env Ne  e1 e2 = mkNe env e1 e2
+mkRel env Une e1 e2 = mkNe env e1 e2
+mkRel env r   e1 e2 = build "({} {} {})" (musfix env r, musfix env e1, musfix env e2)
 
-mkNe :: Expr -> Expr -> Builder
-mkNe e1 e2      = build "(not (= {} {}))" (musfix e1, musfix e2)
+mkNe :: ConvertEnv a -> Expr -> Expr -> Builder
+mkNe env e1 e2      = build "(not (= {} {}))" (musfix env e1, musfix env e2)
   
