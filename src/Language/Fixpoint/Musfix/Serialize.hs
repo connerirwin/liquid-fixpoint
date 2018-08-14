@@ -98,24 +98,29 @@ instance MusfixExport (KVar, WfC a) where
 instance MusfixExport (SubcId, (SimpC a)) where
   musfix env (_, c) = build "(constraint (forall ({}) (=> {} {})))\n" (vars, lhs, musfix env $ crhs c)
     where
-      binds = bs $ ceSInfo env
-      vars = concatBuilders $ map sortedVar (clhs binds c)
+      binds     = bs $ ceSInfo env
+      lhsRefts  = clhs binds c
+      
+      vars = concatBuilders $ map sortedVar lhsRefts
+      
       sortedVar :: (Symbol, SortedReft) -> Builder
       sortedVar (s, sreft) = build "({} {})" (s', musfix env $ sr_sort sreft)
         where
           s' = safeVar env s
       
       lhs :: Builder
-      lhs = combinedRefts $ clhs binds c
+      lhs = combinedRefts lhsRefts
+      
       -- | Combines all the lhs refinements into one and'd expression
       combinedRefts :: [(Symbol, SortedReft)] -> Builder
-      combinedRefts xs = musfix env e
+      combinedRefts xs = musfix env eAnds
         where
-          e = PAnd $ map expr xs
+          eAnds = PAnd $ map expr xs
           expr :: (Symbol, SortedReft) -> Expr
-          expr (_, sreft) = e'
+          expr (s, sreft) = e'
             where
-              Reft (_, e') = sr_reft sreft
+              Reft (_, e) = sr_reft sreft
+              e' = renameVar "v" s e
 
 {- Expressions -}
 
