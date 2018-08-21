@@ -130,9 +130,18 @@ instance MusfixExport Symbol where
 instance MusfixExport Sort where
   musfix _    FInt             = "Int"
   musfix _    (FVar n)         = build "@a{}" (Only n)
-  musfix env  (FApp s s')      = build "{} {}" (musfix env s, musfix env s')
+  musfix env  (FApp s s')      = mkAppS env s s'
   musfix env  (FTC f)          = musfix env $ symbol f
+  musfix env  (FObj a)         = build "[{}]" (Only $ musfix env a)
   musfix _    s                = build "unknown [given {}]" (Only $ show s)
+  
+  
+mkAppS :: ConvertEnv a -> Sort -> Sort -> Builder
+mkAppS env (FApp f' a') a      = build "({} {})" (mkApp' env f' a', musfix env a)
+  where
+    mkApp' env (FApp f' a') a  = build "{} {}" (mkApp' env f' a', musfix env a)
+    mkApp' env f a             = build "{} {}" (musfix env f, musfix env a)
+mkAppS env f a                 = build "({} {})" (musfix env f, musfix env a)
           
 instance MusfixExport SymConst where
   musfix _    (SL t)           = build "{}" (Only t)
@@ -164,7 +173,7 @@ instance MusfixExport Expr where
   musfix env  (ESym z)         = musfix env z
   musfix env  (ECon c)         = musfix env c
   musfix env  (EVar s)         = build "{}" (Only $ safeVar env s)
-  musfix env  (EApp f a)       = build "({} {})" (musfix env f, musfix env a)
+  musfix env  (EApp f a)       = mkApp env f a
   musfix env  (ENeg e)         = build "(- {})" (Only $ musfix env e)
   musfix env  (EBin o l r)     = build "({} {} {})" (musfix env o, musfix env l, musfix env r)
   musfix env  (EIte c t e)     = build "(ite {} {} {})" (musfix env c, musfix env t, musfix env e)
@@ -201,4 +210,11 @@ mkRel env r   e1 e2 = build "({} {} {})" (musfix env r, musfix env e1, musfix en
 
 mkNe :: ConvertEnv a -> Expr -> Expr -> Builder
 mkNe env e1 e2      = build "(not (= {} {}))" (musfix env e1, musfix env e2)
+
+mkApp :: ConvertEnv a -> Expr -> Expr -> Builder
+mkApp env (EApp f' a') a       = build "({} {})" (mkApp' env f' a', musfix env a)
+  where
+    mkApp' env (EApp f' a') a  = build "{} {}" (mkApp' env f' a', musfix env a)
+    mkApp' env f a             = build "{} {}" (musfix env f, musfix env a)
+mkApp env f a                  = build "({} {})" (musfix env f, musfix env a)
   
