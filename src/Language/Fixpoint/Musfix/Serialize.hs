@@ -25,9 +25,11 @@ import qualified Data.List              as L
 
 -- | Default pretty names
 nameTranslations :: M.HashMap String String
-nameTranslations = M.fromList [ ("Set_cup",   "union")
-                              , ("Set_Set",     "Set")
-                              , ("Set_mem",      "in")
+nameTranslations = M.fromList [ ("Set_cup",     "union")
+                              , ("Set_cap", "intersect")
+                              , ("Set_Set",       "Set")
+                              , ("Set_mem",        "in")
+                              , ("bool",         "Bool")
                               ]
 
 -- | Converts the given SInfo object into a MUSFix compatible string
@@ -36,13 +38,14 @@ convertToMusFix si = (LT.unpack (Builder.toLazyText (musfixFromInfo si)))
 
 -- | Produce a lazy-text builder from the given SInfo
 musfixFromInfo :: SInfo a -> Builder
-musfixFromInfo si = build txt (fs, qs, wfs, cs)
+musfixFromInfo si = build txt (srt, fs, qs, wfs, cs)
     where
       env = ConvertEnv {
               ceSInfo = si,
               cePrettyVars = nameTranslations
             }
-      txt = "; Functions\n{}\n\n; Qualifiers\n{}\n\n; Well-formedness constraints\n{}\n\n; Horn constraints\n{}"
+      txt = "; Uninterpreted Sorts\n{}\n\n; Uninterpreted Functions\n{}\n\n; Qualifiers\n{}\n\n; Well-formedness constraints\n{}\n\n; Horn constraints\n{}"
+      srt = concatBuilders $ map (musfix env) (ddecls si)
       fs  = mkDeclFuns env $ gLits si
       qs  = concatBuilders $ map (musfix env) (quals si)
       wfs = concatBuilders $ map (musfix env) (M.toList (ws si))
@@ -87,10 +90,18 @@ mkDeclFuns env senv = concatBuilders $ map (mkDeclFun env) binds
     binds = toListSEnv senv
     
 mkDeclFun :: ConvertEnv a -> (Symbol, Sort) -> Builder
-mkDeclFun env (n, s) = build "(declare-fun {} {})" (name, musfix env s)
+mkDeclFun env (n, s) = build "(declare-fun {} {})\n" (name, musfix env s)
   where
     name = safeVar env n
     
+    
+{- Sort declarations -}
+instance MusfixExport DataDecl where
+  musfix env d = build "(declare-sort {} {})\n" (name, numVars)
+    where
+      name = safeVar env $ symbol (ddTyCon d)
+      numVars = ddVars d
+
 
 {- Constraint types -}
 
