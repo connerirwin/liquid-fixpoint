@@ -14,6 +14,42 @@ import Data.Text.Format
 import Data.Text.Lazy.Builder (Builder)
 import qualified Data.Text.Lazy as LT
 
+-- | 
+data LiteralType = 
+    FunctionLiteral
+  | ConstantLiteral
+  deriving (Enum)
+  
+-- | Gets the type of a given literal from a sort
+literalType :: Sort -> LiteralType
+literalType (FFunc _ _) = FunctionLiteral
+literalType (FAbs  _ s) = literalType s
+literalType _           = ConstantLiteral
+
+functionLiterals :: [(Symbol, Sort)] -> [(Symbol, Sort)]
+functionLiterals xs = filter f' xs
+  where
+    f' (_, s) = case literalType s of
+        FunctionLiteral -> True
+        _               -> False
+      
+constantLiterals :: [(Symbol, Sort)] -> [(Symbol, Sort)]
+constantLiterals xs = filter f' xs
+  where
+    f' (_, s) = case literalType s of
+        ConstantLiteral -> True
+        _               -> False
+        
+-- | Get the formal types of a function sort
+formalSortsFuncS :: Sort -> [Sort]
+formalSortsFuncS (FFunc a r) = a:(formalSortsFuncS r)
+formalSortsFuncS _           = []
+
+-- | Get the return type of a function sort
+returnSortFuncS :: Sort -> Sort
+returnSortFuncS (FFunc _ r) = returnSortFuncS r
+returnSortFuncS s           = s
+
 -- | Turns a list of builders into one concatenated sequence
 concatBuilders :: [Builder] -> Builder
 concatBuilders bs = foldl (<>) "" bs
