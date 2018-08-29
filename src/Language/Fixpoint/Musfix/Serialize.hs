@@ -38,22 +38,23 @@ convertToMusFix si = (LT.unpack (Builder.toLazyText (musfixFromInfo si)))
 
 -- | Produce a lazy-text builder from the given SInfo
 musfixFromInfo :: SInfo a -> Builder
-musfixFromInfo si = build txt (ds, srt, cns, fs, qs, wfs, cs)
+musfixFromInfo si = build txt (decList, decSorts, decConsts, decDists, decFuncs, qualifiers, wfcs, horns)
     where
       env = ConvertEnv {
               ceSInfo = si,
               cePrettyVars = nameTranslations
             }
       gBinds = toListSEnv $ gLits si
-      txt = "; Uninterpreted Sorts\n{}\n{}\n\n; Constants\n{}\n\n; Uninterpreted Functions\n{}\n\n; Qualifiers\n{}\n\n; Well-formedness constraints\n{}\n\n; Horn constraints\n{}"
-      ds :: String
-      ds  = "(declare-sort List 1)"
-      srt = concatBuilders $ map (musfix env) (ddecls si)
-      fs  = concatBuilders $ map (mkDeclFun env) (functionLiterals gBinds)
-      cns = concatBuilders $ map (mkDeclConst env) (constantLiterals gBinds)
-      qs  = concatBuilders $ map (musfix env) (quals si)
-      wfs = concatBuilders $ map (musfix env) (M.toList (ws si))
-      cs  = concatBuilders $ map (musfix env) (M.toList (cm si))
+      txt = "; Uninterpreted Sorts\n{}\n{}\n\n; Constants\n{}\n\n; Distinct Constants\n{}\n\n; Uninterpreted Functions\n{}\n\n; Qualifiers\n{}\n\n; Well-formedness constraints\n{}\n\n; Horn constraints\n{}"
+      decList :: String
+      decList     = "(declare-sort List 1)"
+      decSorts    = concatBuilders $ map (musfix env) (ddecls si)
+      decConsts   = concatBuilders $ map (mkDeclConst env) (constantLiterals gBinds)
+      decDists    = concatBuilders $ map (mkDeclDistincts env) (groupBySorts (toListSEnv $ dLits si))
+      decFuncs    = concatBuilders $ map (mkDeclFun env) (functionLiterals gBinds)
+      qualifiers  = concatBuilders $ map (musfix env) (quals si)
+      wfcs        = concatBuilders $ map (musfix env) (M.toList (ws si))
+      horns       = concatBuilders $ map (musfix env) (M.toList (cm si))
 
 -- | Environment for conversion
 data ConvertEnv a = ConvertEnv {
@@ -99,6 +100,13 @@ mkDeclFun env (n, s) = build "(declare-fun {} {})\n" (safeVar env n, musfix env 
 
 mkDeclConst :: ConvertEnv a -> (Symbol, Sort) -> Builder
 mkDeclConst env (n, s) = build "(declare-const {} {})\n" (safeVar env n, musfix env s)
+
+mkDeclDistincts :: ConvertEnv a -> [Symbol] -> Builder
+mkDeclDistincts env distincts = build "(assert (distinct {}))\n" (Only consts)
+  where
+    consts = concatBuildersS " " $ map mkConst distincts
+    mkConst sym = build "{}" (Only $ safeVar env sym)
+    
 
 {- Sort declarations -}
 instance MusfixExport DataDecl where

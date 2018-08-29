@@ -12,6 +12,7 @@ import Language.Fixpoint.Types
 import Data.Semigroup
 import Data.Text.Format
 import Data.Text.Lazy.Builder (Builder)
+import qualified Data.HashMap.Strict    as M
 import qualified Data.Text.Lazy as LT
 
 -- | 
@@ -49,6 +50,17 @@ formalSortsFuncS _           = []
 returnSortFuncS :: Sort -> Sort
 returnSortFuncS (FFunc _ r) = returnSortFuncS r
 returnSortFuncS s           = s
+
+-- | Groups symbols by their sort
+groupBySorts :: [(Symbol, Sort)] -> [[Symbol]]
+groupBySorts xs = M.elems $ toMap xs M.empty
+  where
+    toMap :: [(Symbol, Sort)] -> M.HashMap Sort [Symbol] -> M.HashMap Sort [Symbol]
+    toMap ((sym, srt):xs) mp = toMap xs (M.alter f srt mp)
+      where
+        f (Just syms) = Just $ syms ++ [sym]
+        f Nothing     = Just $ [sym]
+    toMap _ mp      = mp
 
 -- | Turns a list of builders into one concatenated sequence
 concatBuilders :: [Builder] -> Builder
