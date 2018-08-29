@@ -6,7 +6,7 @@
 {-# LANGUAGE DoAndIfThenElse      #-}
 
 module Language.Fixpoint.Musfix.Util where
-  
+
 import Language.Fixpoint.Types
 
 import Data.Semigroup
@@ -15,12 +15,16 @@ import Data.Text.Lazy.Builder (Builder)
 import qualified Data.HashMap.Strict    as M
 import qualified Data.Text.Lazy as LT
 
--- | 
-data LiteralType = 
+-- | TODO Prune unnecessary qualifiers and such
+ignoredFuncs :: [String]
+ignoredFuncs = ["Set_sng"]
+
+-- |
+data LiteralType =
     FunctionLiteral
   | ConstantLiteral
   deriving (Enum)
-  
+
 -- | Gets the type of a given literal from a sort
 literalType :: Sort -> LiteralType
 literalType (FFunc _ _) = FunctionLiteral
@@ -28,19 +32,21 @@ literalType (FAbs  _ s) = literalType s
 literalType _           = ConstantLiteral
 
 functionLiterals :: [(Symbol, Sort)] -> [(Symbol, Sort)]
-functionLiterals xs = filter f' xs
+functionLiterals xs = filter (\x -> f' x && g x) xs
   where
     f' (_, s) = case literalType s of
         FunctionLiteral -> True
         _               -> False
-      
+
+    g (sym, _) = not $ (symbolString sym) `elem` ignoredFuncs
+
 constantLiterals :: [(Symbol, Sort)] -> [(Symbol, Sort)]
 constantLiterals xs = filter f' xs
   where
     f' (_, s) = case literalType s of
         ConstantLiteral -> True
         _               -> False
-        
+
 -- | Get the formal types of a function sort
 formalSortsFuncS :: Sort -> [Sort]
 formalSortsFuncS (FFunc a r) = a:(formalSortsFuncS r)
@@ -78,7 +84,7 @@ sortedDomain env wf = (vName, vSort) : map symSorts (envCs env $ wenv wf)
   where
     (vName, vSort, _) = wrft wf
     symSorts (sym, sreft) = (sym, sr_sort sreft)
-    
+
 -- | Renames all occurances of the given variable
 renameVar :: String -> Symbol -> Expr -> Expr
 renameVar s s' e = rv e
