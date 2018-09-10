@@ -23,6 +23,8 @@ import qualified Data.Text.Lazy         as LT
 import qualified Data.Text.Lazy.Builder as Builder
 import qualified Data.List              as L
 
+import Debug.Trace
+
 -- | Default pretty names
 nameTranslations :: M.HashMap String String
 nameTranslations = M.fromList [ ("Set_cup",     "union")
@@ -144,43 +146,44 @@ instance MusfixExport (KVar, WfC a) where
 
 -- | Build horn constraint
 instance MusfixExport (SubcId, (SimpC a)) where
-  musfix env (_, c) = build "(constraint (forall ({}) (=> {} {})))\n" (vars, lhs, musfix env $ crhs c)
+  musfix env (_, c) = build "(constraint (forall ({}) (=> {} {})))\n" (vars, lhs, rhs)
     where
       binds     = bs $ ceSInfo env
       lhsRefts  = clhs binds c
 
-      vars = concatBuilders $ map sortedVar lhsRefts
+      vars = concatBuilders $ map sortedVar (filter isNotGlobalDef lhsRefts)
+      isNotGlobalDef (s, _) = not $ hasGlobalDef (ceSInfo env) s
 
       sortedVar :: (Symbol, SortedReft) -> Builder
       sortedVar (s, sreft) = build "({} {})" (s', musfix env $ sr_sort sreft)
         where
           s' = safeVar env s
-
-      lhs :: Builder
-      lhs = combinedRefts lhsRefts
+          
+      lhs = combinedRefts (traceShowId lhsRefts)
+      rhs = musfix env $ (traceShowId $ crhs c)
 
       -- | Combines all the lhs refinements into one and'd expression
       combinedRefts :: [(Symbol, SortedReft)] -> Builder
-      combinedRefts xs = musfix env eAnds
+      combinedRefts xs = musfix env $ filterRedundantBools eAnds
         where
           eAnds = PAnd $ map expr xs
           expr :: (Symbol, SortedReft) -> Expr
           expr (s, sreft) = e'
             where
               Reft (_, e) = sr_reft sreft
-              e' = renameVar "v" s e
+              e' = (renameVar "v" s) e
 
 {- Expressions -}
 
 instance MusfixExport Symbol where
-  musfix _                = symbolBuilder
+  musfix _                     = symbolBuilder
 
 instance MusfixExport Sort where
   musfix _    FInt             = "Int"
   musfix _    (FVar n)         = build "@a{}" (Only n)
   musfix env  (FApp s s')      = mkAppS env s s'
   musfix env  (FTC f)          = build "{}" (Only $ prettySort env (symbol f))
-  musfix env  (FObj a)         = build "Obj {}" (Only $ musfix env a)
+  musfix env  (FObj a)         = build "@obj_{}" (Only $ musfix env a)
   musfix env  (FAbs _ s)       = build "{}" (Only $ musfix env s)
   musfix env  f@(FFunc _ _)    = build "({}) {}" (mkFuncArgsS env $ formalSortsFuncS f, musfix env $ returnSortFuncS f)
   musfix _    s                = build "unknown [given {}]" (Only $ show s)
@@ -191,11 +194,13 @@ mkFuncArgsS env srts           = concatBuildersS " " $ map b srts
     b a = build "{}" (Only $ musfix env a)
 
 mkAppS :: ConvertEnv a -> Sort -> Sort -> Builder
-mkAppS env (FApp f' a') a      = build "({} {})" (mkApp' env f' a', musfix env a)
+mkAppS env (FApp f' a') a      = build "({} {})" (mkApp' env 1 f' a', musfix env a)
   where
-    mkApp' env (FApp f' a') a  = build "{} {}" (mkApp' env f' a', musfix env a)
-    mkApp' env f a             = build "{} {}" (musfix env f, musfix env a)
+    mkApp' :: ConvertEnv a -> Int -> Sort -> Sort -> Builder
+    mkApp' env d (FApp f' a') a  = build "{} {}" (mkApp' env (d + 1) f' a', musfix env a)
+    mkApp' env d f a             = build "{}{} {}" (musfix env f, d + 1, musfix env a)
 mkAppS env f a                 = build "({} {})" (musfix env f, musfix env a)
+
 
 instance MusfixExport SymConst where
   musfix _    (SL t)           = build "{}" (Only t)
@@ -228,7 +233,7 @@ instance MusfixExport Expr where
   musfix env  (ECon c)         = musfix env c
   musfix env  (EVar s)         = build "{}" (Only $ safeVar env s)
 
-  -- special case for Set_empty application
+  -- special case for Set_empty application (TODO: Does mkApp break this?)
   musfix env  (EApp (ECst (EVar s) _) _)
     | safeVar env s == "Set_empty"  = "{}"
 
@@ -274,5 +279,7 @@ mkApp :: ConvertEnv a -> Expr -> Expr -> Builder
 mkApp env (EApp f' a') a       = build "({} {})" (mkApp' env f' a', musfix env a)
   where
     mkApp' env (EApp f' a') a  = build "{} {}" (mkApp' env f' a', musfix env a)
+    mkApp' env (ECst (EVar s) _) a 
+      | s == "apply"           = musfix env a
     mkApp' env f a             = build "{} {}" (musfix env f, musfix env a)
 mkApp env f a                  = build "({} {})" (musfix env f, musfix env a)

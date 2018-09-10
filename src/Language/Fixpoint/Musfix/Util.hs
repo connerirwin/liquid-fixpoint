@@ -8,6 +8,7 @@
 module Language.Fixpoint.Musfix.Util where
 
 import Language.Fixpoint.Types
+import Language.Fixpoint.Types.Visitor
 
 import Data.Semigroup
 import Data.Text.Format
@@ -47,6 +48,10 @@ constantLiterals xs = filter f' xs
         ConstantLiteral -> True
         _               -> False
 
+-- | True if the symbol is included in a global definition 
+hasGlobalDef :: SInfo a -> Symbol -> Bool
+hasGlobalDef si sym = memberSEnv sym (gLits si)
+
 -- | Get the formal types of a function sort
 formalSortsFuncS :: Sort -> [Sort]
 formalSortsFuncS (FFunc a r) = a:(formalSortsFuncS r)
@@ -85,21 +90,32 @@ sortedDomain env wf = (vName, vSort) : map symSorts (envCs env $ wenv wf)
     (vName, vSort, _) = wrft wf
     symSorts (sym, sreft) = (sym, sr_sort sreft)
 
+-- | Filters out redudant booleans in AND/OR expressions
+filterRedundantBools :: Expr -> Expr
+filterRedundantBools e      = mapExpr f e
+  where
+    f (PAnd xs)
+      | length xs' > 1      = PAnd xs'
+      | length xs == 0      = PTrue
+      | otherwise           = head xs
+      where
+        xs' = filter notTrue xs
+        notTrue PTrue = False
+        notTrue _     = True
+    f (POr xs)
+      | length xs' > 1      = POr xs'
+      | length xs == 0      = PFalse
+      | otherwise           = head xs
+      where
+        xs' = filter notFalse xs
+        notFalse PFalse     = False
+        notFalse _          = True
+    f e                     = e
+
 -- | Renames all occurances of the given variable
 renameVar :: String -> Symbol -> Expr -> Expr
-renameVar s s' e = rv e
+renameVar s s' e = mapExpr rv e
   where
     rv (EVar n)
       | symbolString n == s = EVar s'
-    rv (EApp f a)           = EApp (rv f) (rv a)
-    rv (ENeg e)             = ENeg $ rv e
-    rv (EBin o l r)         = EBin o (rv l) (rv r)
-    rv (EIte c t e)         = EIte (rv c) (rv t) (rv e)
-    rv (ECst p x)           = ECst (rv p) x
-    rv (PAnd xs)            = PAnd $ map rv xs
-    rv (POr  xs)            = POr $ map rv xs
-    rv (PNot e)             = PNot $ rv e
-    rv (PImp p q)           = PImp (rv p) (rv q)
-    rv (PIff p q)           = PIff (rv p) (rv q)
-    rv (PAtom r e1 e2)      = PAtom r (rv e1) (rv e2)
     rv e                    = e
