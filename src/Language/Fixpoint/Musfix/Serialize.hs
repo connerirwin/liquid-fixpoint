@@ -46,7 +46,7 @@ musfixFromInfo si = build txt (decList, decSorts, decConsts, decDists, decFuncs,
               cePrettyVars = nameTranslations
             }
       gBinds = toListSEnv $ gLits si
-      txt = "; Uninterpreted Sorts\n{}\n{}\n\n; Constants\n{}\n\n; Distinct Constants\n{}\n\n; Uninterpreted Functions\n{}\n\n; Qualifiers\n{}\n\n; Well-formedness constraints\n{}\n\n; Horn constraints\n{}"
+      txt = "; Uninterpreted Sorts\n{}\n{}\n\n; Constants\n{}\n\n; Distinct Constants\n{}\n\n; Uninterpreted Functions\n{}\n\n; Qualifiers\n{}\n\n; Well-formedness Constraints\n{}\n\n; Horn Constraints\n{}"
       decList :: String
       decList     = "(declare-sort List 1)"
       decSorts    = concatBuilders $ map (musfix env) (ddecls si)
