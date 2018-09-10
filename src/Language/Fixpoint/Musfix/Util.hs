@@ -119,3 +119,38 @@ renameVar s s' e = mapExpr rv e
     rv (EVar n)
       | symbolString n == s = EVar s'
     rv e                    = e
+
+data UninterpSort = UninterpSort Symbol Int
+
+-- | Gets all uninterpreted sort constructors in a given sort
+constructorsInSort :: Sort -> [UninterpSort]
+constructorsInSort = find
+  where
+    find (FFunc a b)  = (find a) ++ (find b)
+    find f@(FApp _ b)
+      | Just fnd <- appSortName f = fnd:(find b)
+    find (FAbs _ s)   = find s
+    find f@(FTC _)
+      | Just fnd <- appSortName f = [fnd]
+    find _            = []
+
+-- | Gets all uninterpreted sorts from uninterpreted functions
+uninterpretedSorts :: SInfo a -> [(Symbol, [Int])]
+uninterpretedSorts si = M.toList symMap
+  where
+    symMap = foldl collect M.empty cons
+    gBinds = toListSEnv $ gLits si
+    lits = functionLiterals gBinds
+    cons = foldl (++) [] (map (constructorsInSort . snd) lits)
+    collect :: M.HashMap Symbol [Int] -> UninterpSort -> M.HashMap Symbol [Int]
+    collect m (UninterpSort name num) = M.insert name counts' m
+      where
+        counts = M.lookupDefault [] name m
+        counts' = if num `elem` counts then counts else num:counts
+    
+appSortName :: Sort -> Maybe UninterpSort
+appSortName s = sname 0 s
+  where
+    sname d (FApp a _) = sname (d + 1) a
+    sname d (FTC a) = Just $ UninterpSort (symbol a) d
+    sname _ _ = Nothing

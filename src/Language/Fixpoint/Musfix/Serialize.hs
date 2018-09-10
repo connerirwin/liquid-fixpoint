@@ -41,17 +41,16 @@ convertToMusFix si = (LT.unpack (Builder.toLazyText (musfixFromInfo si)))
 
 -- | Produce a lazy-text builder from the given SInfo
 musfixFromInfo :: SInfo a -> Builder
-musfixFromInfo si = build txt (decList, decSorts, decConsts, decDists, decFuncs, qualifiers, wfcs, horns)
+musfixFromInfo si = build txt (decSorts1, decSorts2, decConsts, decDists, decFuncs, qualifiers, wfcs, horns)
     where
       env = ConvertEnv {
               ceSInfo = si,
               cePrettyVars = nameTranslations
             }
       gBinds = toListSEnv $ gLits si
-      txt = "; Uninterpreted Sorts\n{}\n{}\n\n; Constants\n{}\n\n; Distinct Constants\n{}\n\n; Uninterpreted Functions\n{}\n\n; Qualifiers\n{}\n\n; Well-formedness Constraints\n{}\n\n; Horn Constraints\n{}"
-      decList :: String
-      decList     = "(declare-sort List 1)"
-      decSorts    = concatBuilders $ map (musfix env) (ddecls si)
+      txt = "; Uninterpreted Sorts\n{}{}\n\n; Constants\n{}\n\n; Distinct Constants\n{}\n\n; Uninterpreted Functions\n{}\n\n; Qualifiers\n{}\n\n; Well-formedness Constraints\n{}\n\n; Horn Constraints\n{}"
+      decSorts1   = concatBuilders $ map (musfix env) (ddecls si)
+      decSorts2   = concatBuilders $ map (mkUninterpSorts env) (uninterpretedSorts si)
       decConsts   = concatBuilders $ map (mkDeclConst env) (constantLiterals gBinds)
       decDists    = concatBuilders $ map (mkDeclDistincts env) (groupBySorts (toListSEnv $ dLits si))
       decFuncs    = concatBuilders $ map (mkDeclFun env) (functionLiterals gBinds)
@@ -117,6 +116,12 @@ instance MusfixExport DataDecl where
     where
       name = safeVar env $ symbol (ddTyCon d)
       numVars = ddVars d
+      
+mkUninterpSorts :: ConvertEnv a -> (Symbol, [Int]) -> Builder
+mkUninterpSorts env (name, nums) = concatBuilders $ map f nums
+  where
+    f :: Int -> Builder
+    f n = build "(declare-sort {}{} {})\n" (prettySort env name, n, n)
 
 {- Constraint types -}
 
@@ -194,13 +199,12 @@ mkFuncArgsS env srts           = concatBuildersS " " $ map b srts
     b a = build "{}" (Only $ musfix env a)
 
 mkAppS :: ConvertEnv a -> Sort -> Sort -> Builder
-mkAppS env (FApp f' a') a      = build "({} {})" (mkApp' env 1 f' a', musfix env a)
+mkAppS env f a              = build "({})" (Only $ mk env 1 f a)
   where
-    mkApp' :: ConvertEnv a -> Int -> Sort -> Sort -> Builder
-    mkApp' env d (FApp f' a') a  = build "{} {}" (mkApp' env (d + 1) f' a', musfix env a)
-    mkApp' env d f a             = build "{}{} {}" (musfix env f, d + 1, musfix env a)
-mkAppS env f a                 = build "({} {})" (musfix env f, musfix env a)
-
+    mk :: ConvertEnv a -> Int -> Sort -> Sort -> Builder
+    mk env d (FApp f' a') a = build "{} {}" (mk env (d + 1) f' a', musfix env a)
+    mk env d f@(FTC _) a    = build "{}{} {}" (musfix env f, d, musfix env a)
+    mk env _ f a            = build "{} {}" (musfix env f, musfix env a)
 
 instance MusfixExport SymConst where
   musfix _    (SL t)           = build "{}" (Only t)
