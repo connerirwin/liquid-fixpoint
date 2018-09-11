@@ -23,8 +23,6 @@ import qualified Data.Text.Lazy         as LT
 import qualified Data.Text.Lazy.Builder as Builder
 import qualified Data.List              as L
 
-import Debug.Trace
-
 -- | Default pretty names
 nameTranslations :: M.HashMap String String
 nameTranslations = M.fromList [ ("Set_cup",     "union")
@@ -121,6 +119,7 @@ mkUninterpSorts :: ConvertEnv a -> (Symbol, [Int]) -> Builder
 mkUninterpSorts env (name, nums) = concatBuilders $ map f nums
   where
     f :: Int -> Builder
+    f 0 = build "(declare-sort {} {})\n" (prettySort env name, 0 :: Int)
     f n = build "(declare-sort {}{} {})\n" (prettySort env name, n, n)
 
 {- Constraint types -}
@@ -130,15 +129,13 @@ instance MusfixExport Qualifier where
   musfix env q = build "(qualif {} ({}) {})\n" (name, vars, body)
     where
       name = musfix env $ qName q
-      vars = concatBuilders $ map (musfix env) (qParams q)
+      vars = concatBuilders $ map param (qParams q)
       body = musfix env $ qBody q
-
--- | Build qualifier parameter
-instance MusfixExport QualParam where
-  musfix env p = build "({} {})" (name, sort)
-    where
-      name = safeVar env $ qpSym p
-      sort = musfix env $ qpSort p
+      
+      param p = build "({} {})" (name, sort)
+        where
+          name = safeVar env $ qpSym p
+          sort = musfix env $ qpSort p
 
 -- | Build well-formedness constraint
 instance MusfixExport (KVar, WfC a) where
@@ -146,26 +143,23 @@ instance MusfixExport (KVar, WfC a) where
     where
       vars        = concatBuilders $ map svar domain
       fmlSort     = sortBy (compare `on` fst)
-      domain      = fmlSort $ sortedDomain ((bs . ceSInfo) env) wf
+      domain      = fmlSort $ sortedDomainWfC ((bs . ceSInfo) env) wf
       svar (n, s) = build "({} {})" (safeVar env n, musfix env s)
 
 -- | Build horn constraint
 instance MusfixExport (SubcId, (SimpC a)) where
   musfix env (_, c) = build "(constraint (forall ({}) (=> {} {})))\n" (vars, lhs, rhs)
     where
+      lhs = combinedRefts lhsRefts
+      rhs = musfix env $ crhs c
+      
       binds     = bs $ ceSInfo env
       lhsRefts  = clhs binds c
-
-      vars = concatBuilders $ map sortedVar (filter isNotGlobalDef lhsRefts)
+      
+      domain = (sortedDomainSimpC binds c)
+      vars = concatBuilders $ map sortedVar (filter isNotGlobalDef domain)
       isNotGlobalDef (s, _) = not $ hasGlobalDef (ceSInfo env) s
-
-      sortedVar :: (Symbol, SortedReft) -> Builder
-      sortedVar (s, sreft) = build "({} {})" (s', musfix env $ sr_sort sreft)
-        where
-          s' = safeVar env s
-          
-      lhs = combinedRefts (traceShowId lhsRefts)
-      rhs = musfix env $ (traceShowId $ crhs c)
+      sortedVar (s, srt) = build "({} {})" (safeVar env s, musfix env srt)
 
       -- | Combines all the lhs refinements into one and'd expression
       combinedRefts :: [(Symbol, SortedReft)] -> Builder
