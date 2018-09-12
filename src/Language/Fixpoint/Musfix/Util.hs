@@ -40,19 +40,9 @@ constantLiterals xs = filter (not . isFunctionSort . snd) xs
 hasGlobalDef :: SInfo a -> Symbol -> Bool
 hasGlobalDef si sym = memberSEnv sym (gLits si)
 
--- | Get the formal types of a function sort
-formalSortsFuncS :: Sort -> [Sort]
-formalSortsFuncS (FFunc a r) = a:(formalSortsFuncS r)
-formalSortsFuncS _           = []
-
--- | Get the return type of a function sort
-returnSortFuncS :: Sort -> Sort
-returnSortFuncS (FFunc _ r) = returnSortFuncS r
-returnSortFuncS s           = s
-
 -- | Groups symbols by their sort
-groupBySorts :: [(Symbol, Sort)] -> [[Symbol]]
-groupBySorts xs = M.elems $ toMap xs M.empty
+groupBySorts :: [(Symbol, Sort)] -> [(Sort, [Symbol])]
+groupBySorts xs = M.toList $ toMap xs M.empty
   where
     toMap :: [(Symbol, Sort)] -> M.HashMap Sort [Symbol] -> M.HashMap Sort [Symbol]
     toMap ((sym, srt):xs) mp = toMap xs (M.alter f srt mp)
