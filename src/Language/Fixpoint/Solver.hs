@@ -49,6 +49,7 @@ import           Control.DeepSeq
 
 -- Musfix export
 import           Language.Fixpoint.Musfix.Serialize
+import qualified Debug.Trace as DB
 
 ---------------------------------------------------------------------------
 -- | Solve an .fq file ----------------------------------------------------
@@ -216,7 +217,8 @@ solveNative' !cfg !fi0 = do
   -- TODO: clean up super hacky export of (our?) SMT2
   let musfixOutput = convertToMusFix si6
   putStrLn musfixOutput
-  writeFile "lqfp2musfix.msmt" musfixOutput
+  writeFile "lqfp2musfix.msmt" (DB.traceShow (symbolEnv cfg si6) musfixOutput)
+  
   saveSolution cfg res
   -- when (save cfg) $ saveSolution cfg
   -- writeLoud $ "\nSolution:\n"  ++ showpp (resSolution res)

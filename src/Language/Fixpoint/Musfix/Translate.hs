@@ -24,9 +24,16 @@ symbolId s = LT.fromStrict $ FixpointTypes.symbolText s
 
 -- | Converts the given SInfo into a MusfixInfo
 musfixInfo :: SInfo a -> MF.MusfixInfo
-musfixInfo si = mi4
+musfixInfo si = mi'
   where
-    mi1 = MF.MusfixInfo {
+    mi' = ( escapeVars .
+            filterBuiltInSorts .
+            removeApplyApps . 
+            escapeGlobals . 
+            renameConstructorFuncs .
+            addUninterpSorts . 
+            (replaceSymbols primitiveTranslations)) mi
+    mi = MF.MusfixInfo {
       MF.qualifiers = findQualifiers si,
       MF.constants = findConstants si,
       MF.distincts = findDistincts si,
@@ -35,9 +42,22 @@ musfixInfo si = mi4
       MF.constraints = findConstraints si,
       MF.sorts = [] -- these must be found
     }
-    mi2 = addUninterpSorts mi1
-    mi3 = escapeSymbols mi2
-    mi4 = removeApplyApps mi3
+    
+-- | Translations to specific Musfix types/symbols
+primitiveTranslations :: M.HashMap MF.Id MF.Id
+primitiveTranslations = M.fromList [ 
+                                ("Set_cup",        "union")
+                              , ("Set_cap",    "intersect")
+                              , ("Set_Set",          "Set")
+                              , ("Set_sng",          "Set")
+                              , ("Set_mem",           "in")
+                              , ("bool",            "Bool")
+                              , ("GHC.Types.Bool",  "Bool")
+                              , ("[]",              "List")
+                              ]
+                              
+builtInSorts :: [MF.Id]
+builtInSorts = [ "Bool", "Int" ]
     
 -- | Gets the Musfix version of a given sort
 convertSort :: Sort -> MF.Sort
@@ -56,7 +76,7 @@ convertAppS s = MF.TypeConS name args
     
     rootc (FApp a _) = rootc a
     rootc (FTC f)    = symbolId $ symbol f
-    rootc (FVar n)   = LT.pack $ "@tycon" ++ (show n)
+    rootc (FVar n)   = LT.pack $ "@t" ++ (show n)
     rootc _          = error "application in sort has no leftmost type constructor"
     
     collect (FApp a b) ts = args
@@ -125,15 +145,20 @@ convertExpr (ECst e _ )       = convertExpr e
 convertExpr PTrue             = MF.SymbolExpr "True"
 convertExpr PFalse            = MF.SymbolExpr "False"
 convertExpr (PAnd [])         = convertExpr PTrue
-convertExpr (PAnd es)         = MF.AppExpr (MF.SymbolExpr "and") $ map convertExpr es
+convertExpr (PAnd es)         = convertAndOr "and" es
 convertExpr (POr [])          = convertExpr PFalse
-convertExpr (POr es)          = MF.AppExpr (MF.SymbolExpr "or") $ map convertExpr es
+convertExpr (POr es)          = convertAndOr "or" es
 convertExpr (PNot e)          = MF.AppExpr (MF.SymbolExpr "not") [convertExpr e]
 convertExpr (PImp p q)        = MF.AppExpr (MF.SymbolExpr "=>") [convertExpr p, convertExpr q]
 convertExpr (PIff p q)        = MF.AppExpr (MF.SymbolExpr "=") [convertExpr p, convertExpr q]
 convertExpr (PKVar k s)       = convertKVar k s
 convertExpr (PAtom r e1 e2)   = convertRel r e1 e2
 convertExpr _                 = error "unsupported expression"
+
+convertAndOr :: MF.Id -> [Expr] -> MF.Expr
+convertAndOr _  [a] = convertExpr a
+convertAndOr op (a:b:xs) = MF.AppExpr (MF.SymbolExpr op) [convertExpr a, convertAndOr op (b:xs)]
+convertAndOr op _ = MF.AppExpr (MF.SymbolExpr "empty") [MF.SymbolExpr op]
 
 convertAppExpr :: Expr -> MF.Expr
 convertAppExpr e = MF.AppExpr rootExpr args
@@ -250,11 +275,12 @@ findConstraints si = map box constraints
 
 -- | Adds uninterpreted sorts to the Musfix info based on contextual usage of what appear to be type constructors               
 addUninterpSorts :: MF.MusfixInfo -> MF.MusfixInfo
-addUninterpSorts mi = mi1
+addUninterpSorts mi = mi2
   where
     mi1 = mi {
         MF.sorts = foldr dec [] lsfnd
       }
+    mi2 = disambiguateTypeCons fnd2 mi1
     
     gls = globals mi
     
@@ -281,7 +307,9 @@ addUninterpSorts mi = mi1
     searchSort m (MF.TypeConS name srts) = m2
       where
         m1 = foldl searchSort m srts
-        m2 = insertUnique name (length srts) m1
+        m2 = case LT.head name of
+          '@' -> m1
+          _   -> insertUnique name (length srts) m1
     searchSort m _ = m
     
     searchVar m (MF.Var _ srt) = searchSort m srt
@@ -292,6 +320,40 @@ addUninterpSorts mi = mi1
         m1 = foldl searchSort m args
         m2 = searchSort m1 ret
     searchQualifiers m (MF.Qual _ vars _) = foldl searchVar m vars
+    
+-- | Disambiguates type constructors that take variable arguments
+disambiguateTypeCons :: M.HashMap MF.Id [Int] -> MF.MusfixInfo -> MF.MusfixInfo
+disambiguateTypeCons ms mi = mi'
+  where
+    mi' = mi { MF.qualifiers = map mQuals $ MF.qualifiers mi,
+               MF.constants = map mConsts $ MF.constants mi,
+               MF.functions = map mFuncs $ MF.functions mi,
+               MF.wfConstraints = map mWfCs $ MF.wfConstraints mi,
+               MF.constraints = map mConstraints $ MF.constraints mi }
+               
+    nd name = (length nums > 1)
+      where
+        nums = M.lookupDefault [] name ms
+    
+    mSort (MF.TypeConS name srt) = MF.TypeConS name' (map mSort srt)
+      where
+        name' = if nd name then 
+            LT.append name (LT.pack $ show (length srt))
+          else 
+            name
+    mSort s = s
+    mVar (MF.Var name sort) = MF.Var name (mSort sort)
+    mQuals (MF.Qual name vars expr) = MF.Qual name (map mVar vars) (mExpr expr)
+    mConsts (MF.Const name srt) = MF.Const name (mSort srt)
+    mFuncs (MF.Func name args ret) = MF.Func name (map mSort args) (mSort ret)
+    mWfCs (MF.WfC name vars) = MF.WfC name (map mVar vars)
+    mConstraints (MF.HornC domain expr) = MF.HornC (map mVar domain) (mExpr expr)
+    mExpr (MF.AppExpr (MF.SymbolExpr f) as)
+      | nd f = MF.AppExpr (MF.SymbolExpr f') (map mExpr as)
+      where
+        f' = LT.append f (LT.pack $ show (length as))
+    mExpr (MF.AppExpr f as) = MF.AppExpr (mExpr f) (map mExpr as)
+    mExpr e = e
     
 -- | Gets a hashmap of all the globals in the Musfix info
 globals :: MF.MusfixInfo -> M.HashMap MF.Id Bool
@@ -343,6 +405,7 @@ replaceSymbols m mi = mi'
     f sym = M.lookupDefault sym sym m
     
 -- | Removes apply's from function applications
+-- | Currently apply's are filtered out, but it would be realitively easier to create a transformation that keeps them and replaces all functions with integer constants
 removeApplyApps :: MF.MusfixInfo -> MF.MusfixInfo
 removeApplyApps mi = mi1
   where
@@ -356,9 +419,56 @@ removeApplyApps mi = mi1
     rmE (MF.AppExpr e as) = MF.AppExpr (rmE e) (map rmE as)
     rmE e = e
     
--- | Escapes all known symbols
-escapeSymbols :: MF.MusfixInfo -> MF.MusfixInfo
-escapeSymbols mi = mi'
+-- | Filters built in sorts
+filterBuiltInSorts :: MF.MusfixInfo -> MF.MusfixInfo
+filterBuiltInSorts mi = mi'
+  where
+    mi' = mi { MF.sorts = filter nbi $ MF.sorts mi }
+    nbi (MF.SortDecl name _)
+      | name `elem` builtInSorts  = False
+      | otherwise                 = True
+      
+-- | Fixes weird constructors that have the same name as their return sort
+renameConstructorFuncs :: MF.MusfixInfo -> MF.MusfixInfo
+renameConstructorFuncs mi = mi'
+  where
+    mi' = mi {
+      MF.functions = map (renameF cfs) $ MF.functions mi,
+      MF.qualifiers = map (renameQ cfs) $ MF.qualifiers mi,
+      MF.constraints = map (renameC cfs) $ MF.constraints mi
+    }
+    
+    cfs = foldl findCFs M.empty $ MF.functions mi
+    
+    findCFs m f@(MF.Func name _ _)
+      | isCF f    = M.insert name name' m
+      | otherwise = m
+      where
+        name' = LT.append "_mk_" name
+      
+    isCF (MF.Func name _ ret) = case ret of
+        (MF.TypeConS n srts) -> (length srts == 0) && name == n
+        _ -> False
+        
+    renameE m (MF.AppExpr (MF.SymbolExpr name) as) = MF.AppExpr (MF.SymbolExpr name') (map (renameE m) as)
+      where
+        name' = if length as > 0 then
+            M.lookupDefault name name m
+          else
+            name
+    renameE m (MF.AppExpr f as) = MF.AppExpr (renameE m f) (map (renameE m) as)
+    renameE _ e = e
+    
+    renameF m (MF.Func name args ret) = MF.Func name' args ret
+      where
+        name' = M.lookupDefault name name m
+        
+    renameQ m (MF.Qual name vars e) = MF.Qual name vars (renameE m e)
+    renameC m (MF.HornC vars e) = MF.HornC vars (renameE m e)
+    
+-- | Escapes all known global symbols
+escapeGlobals :: MF.MusfixInfo -> MF.MusfixInfo
+escapeGlobals mi = mi'
   where
     mi' = replaceSymbols mp2 mi
     
@@ -374,5 +484,43 @@ escapeSymbols mi = mi'
     
     escConsts m (MF.Const name _) = mapIfUpper m name
     escFuncs m (MF.Func name _ _) = mapIfUpper m name
+
+-- | Escapes variable names
+escapeVars :: MF.MusfixInfo -> MF.MusfixInfo
+escapeVars mi = mi'
+  where
+    mi' = mi { MF.qualifiers = map mQuals $ MF.qualifiers mi,
+               MF.wfConstraints = map mWfCs $ MF.wfConstraints mi,
+               MF.constraints = map mConstraints $ MF.constraints mi }
     
+    -- Map vars
+    mapIfUpper m (MF.Var name _)
+      | isUpper           = M.insert name safe m
+      | otherwise         = m
+      where
+        isUpper           = C.isUpper $ LT.head name
+        safe              = LT.cons '_' name
+    
+    -- Map expressions
+    replaceVarsE m (MF.SymbolExpr sym) = MF.SymbolExpr (M.lookupDefault sym sym m)
+    replaceVarsE m (MF.AppExpr e args) = MF.AppExpr (replaceVarsE m e) (map (replaceVarsE m) args)
+    
+    replaceVarsV m (MF.Var name srt) = MF.Var (M.lookupDefault name name m) srt
+    
+    -- Map top levels
+    mQuals (MF.Qual name vars body) = MF.Qual name vars' body'
+      where
+        replacements = foldl mapIfUpper M.empty vars
+        vars' = map (replaceVarsV replacements) vars
+        body' = replaceVarsE replacements body
         
+    mWfCs (MF.WfC name args) = MF.WfC name args'
+      where
+        replacements = foldl mapIfUpper M.empty args
+        args' = map (replaceVarsV replacements) args
+        
+    mConstraints (MF.HornC domain expr) = MF.HornC domain' expr'
+      where
+        replacements = foldl mapIfUpper M.empty domain
+        domain' = map (replaceVarsV replacements) domain
+        expr' = replaceVarsE replacements expr

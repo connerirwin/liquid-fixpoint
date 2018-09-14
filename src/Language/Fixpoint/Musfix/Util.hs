@@ -16,6 +16,8 @@ import Data.Text.Lazy.Builder (Builder)
 import qualified Data.HashMap.Strict    as M
 import qualified Data.Text.Lazy as LT
 
+import Debug.Trace 
+
 -- | TODO Prune unnecessary qualifiers and such
 ignoredFuncs :: [String]
 ignoredFuncs = ["Set_sng"]
@@ -72,10 +74,14 @@ sortedDomainWfC env wf = (vName, vSort) : map symSorts (envCs env $ wenv wf)
 sortedDomainSimpC :: BindEnv -> SimpC a -> [(Symbol, Sort)]
 sortedDomainSimpC binds c = lhsVars ++ rhsVars
   where
-    lhsVars = map srVar $ clhs binds c
+    lhsVars = foldl srVar [] $ (traceShowId $ clhs binds c)
     rhsVars = []
     
-    srVar (sym, sreft) = (sym, sr_sort sreft)
+    srVar xs (name1, sreft) = a:b:xs
+      where
+        a = (name1, sr_sort sreft)
+        b = (name2, sr_sort sreft)
+        (Reft (name2, _)) = sr_reft sreft
     
 -- | Gets all variable symbols in an expression
 {--exprVars :: Expr -> [Symbol]
