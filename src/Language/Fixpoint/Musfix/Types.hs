@@ -8,6 +8,7 @@
 module Language.Fixpoint.Musfix.Types (
     MusfixInfo (..),
     Sort (..),
+    SortDecl (..),
     Expr (..),
     Var (..),
     Qual (..),
@@ -31,11 +32,15 @@ data MusfixInfo = MusfixInfo {
   distincts  :: [Distincts],
   functions  :: [Func],
   wfConstraints :: [WfC],
-  constraints :: [HornC]
+  constraints :: [HornC],
+  sorts :: [SortDecl]
 }
 
 -- | Musfix sorts
 data Sort = IntS | BoolS | VarS Id | TypeConS Id [Sort] deriving (Show)
+
+-- | Sort declaration
+data SortDecl = SortDecl Id Int
 
 -- | Musfix expressions
 data Expr = 

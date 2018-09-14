@@ -24,7 +24,7 @@ symbolId s = LT.fromStrict $ FixpointTypes.symbolText s
 
 -- | Converts the given SInfo into a MusfixInfo
 musfixInfo :: SInfo a -> MF.MusfixInfo
-musfixInfo si = mi2
+musfixInfo si = mi4
   where
     mi1 = MF.MusfixInfo {
       MF.qualifiers = findQualifiers si,
@@ -32,10 +32,13 @@ musfixInfo si = mi2
       MF.distincts = findDistincts si,
       MF.functions = findFunctions si,
       MF.wfConstraints = findWfCs si,
-      MF.constraints = findConstraints si
+      MF.constraints = findConstraints si,
+      MF.sorts = [] -- these must be found
     }
-    mi2 = escapeSymbols mi1
-
+    mi2 = addUninterpSorts mi1
+    mi3 = escapeSymbols mi2
+    mi4 = removeApplyApps mi3
+    
 -- | Gets the Musfix version of a given sort
 convertSort :: Sort -> MF.Sort
 convertSort FInt          = MF.IntS
@@ -244,6 +247,63 @@ findConstraints si = map box constraints
               where
                 Reft (_, e) = sr_reft sreft
                 e' = (renameVar "v" s) e
+
+-- | Adds uninterpreted sorts to the Musfix info based on contextual usage of what appear to be type constructors               
+addUninterpSorts :: MF.MusfixInfo -> MF.MusfixInfo
+addUninterpSorts mi = mi1
+  where
+    mi1 = mi {
+        MF.sorts = foldr dec [] lsfnd
+      }
+    
+    gls = globals mi
+    
+    fnd1 = foldl searchConstants M.empty (MF.constants mi)
+    fnd2 = foldl searchFunctions fnd1 (MF.functions mi)
+    fnd3 = foldl searchQualifiers fnd2 (MF.qualifiers mi)
+    
+    lsfnd = (M.toList fnd3)
+    
+    dec :: (MF.Id, [Int]) -> [MF.SortDecl] -> [MF.SortDecl]
+    dec (name, nums) decls = foldr ((:) . d) decls nums
+      where
+        d n
+          | length nums > 1   = MF.SortDecl (LT.append name (LT.pack $ show n)) n
+          | otherwise         = MF.SortDecl name n
+    
+    insertUnique k v m
+      | M.member k gls  = m
+      | v `elem` nums   = m
+      | otherwise       = M.insert k (v:nums) m
+      where
+        nums = M.lookupDefault [] k m
+    
+    searchSort m (MF.TypeConS name srts) = m2
+      where
+        m1 = foldl searchSort m srts
+        m2 = insertUnique name (length srts) m1
+    searchSort m _ = m
+    
+    searchVar m (MF.Var _ srt) = searchSort m srt
+        
+    searchConstants m (MF.Const _ srt) = searchSort m srt
+    searchFunctions m (MF.Func _ args ret) = m2
+      where
+        m1 = foldl searchSort m args
+        m2 = searchSort m1 ret
+    searchQualifiers m (MF.Qual _ vars _) = foldl searchVar m vars
+    
+-- | Gets a hashmap of all the globals in the Musfix info
+globals :: MF.MusfixInfo -> M.HashMap MF.Id Bool
+globals mi = gls3
+  where
+    gls1 = foldl inclConsts M.empty (MF.constants mi)
+    gls2 = foldl inclFuncs gls1 (MF.functions mi)
+    gls3 = foldl inclSorts gls2 (MF.sorts mi)
+    
+    inclConsts m (MF.Const name _) = M.insert name True m
+    inclFuncs m (MF.Func name _ _) = M.insert name True m
+    inclSorts m (MF.SortDecl name _) = M.insert name True m
                 
 -- | Maps all symbols in the Musfix info
 mapSymbols :: (MF.Id -> MF.Id) -> MF.MusfixInfo -> MF.MusfixInfo
@@ -275,24 +335,44 @@ mapSymbols f mi = mi'
     mWfCs (MF.WfC name args) = MF.WfC (f name) (map mVar args)
     mConstraints (MF.HornC domain expr) = MF.HornC (map mVar domain) (mExpr expr)
     
+-- | Maps symbols in the Musfix info using a hash map
 replaceSymbols :: M.HashMap MF.Id MF.Id -> MF.MusfixInfo -> MF.MusfixInfo
 replaceSymbols m mi = mi'
   where
     mi' = mapSymbols f mi
     f sym = M.lookupDefault sym sym m
     
+-- | Removes apply's from function applications
+removeApplyApps :: MF.MusfixInfo -> MF.MusfixInfo
+removeApplyApps mi = mi1
+  where
+    mi1 = mi {
+      MF.constraints = map rmC $ MF.constraints mi
+    }
+    
+    rmC (MF.HornC domain expr) = MF.HornC domain $ rmE expr
+    
+    rmE (MF.AppExpr (MF.SymbolExpr "apply") (a:as)) = MF.AppExpr (rmE a) (map rmE as)
+    rmE (MF.AppExpr e as) = MF.AppExpr (rmE e) (map rmE as)
+    rmE e = e
+    
 -- | Escapes all known symbols
 escapeSymbols :: MF.MusfixInfo -> MF.MusfixInfo
 escapeSymbols mi = mi'
   where
-    mi' = replaceSymbols mp mi
+    mi' = replaceSymbols mp2 mi
     
-    mp = foldl escConsts M.empty (MF.constants mi)
+    mp1 = foldl escConsts M.empty (MF.constants mi)
+    mp2 = foldl escFuncs mp1 (MF.functions mi)
     
-    escConsts m (MF.Const name _)
+    mapIfUpper m name
       | isUpper           = M.insert name safe m
       | otherwise         = m
       where
         isUpper           = C.isUpper $ LT.head name
         safe              = LT.cons '_' name
+    
+    escConsts m (MF.Const name _) = mapIfUpper m name
+    escFuncs m (MF.Func name _ _) = mapIfUpper m name
+    
         
