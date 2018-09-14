@@ -17,15 +17,16 @@ import qualified Language.Fixpoint.Types        as FixpointTypes
 import qualified Language.Fixpoint.Musfix.Types as MF
 import qualified Data.HashMap.Strict            as M
 import qualified Data.Text.Lazy                 as LT
+import qualified Data.Char                      as C
 
 symbolId :: Symbol -> MF.Id
 symbolId s = LT.fromStrict $ FixpointTypes.symbolText s
 
 -- | Converts the given SInfo into a MusfixInfo
 musfixInfo :: SInfo a -> MF.MusfixInfo
-musfixInfo si = mi
+musfixInfo si = mi2
   where
-    mi = MF.MusfixInfo {
+    mi1 = MF.MusfixInfo {
       MF.qualifiers = findQualifiers si,
       MF.constants = findConstants si,
       MF.distincts = findDistincts si,
@@ -33,6 +34,7 @@ musfixInfo si = mi
       MF.wfConstraints = findWfCs si,
       MF.constraints = findConstraints si
     }
+    mi2 = escapeSymbols mi1
 
 -- | Gets the Musfix version of a given sort
 convertSort :: Sort -> MF.Sort
@@ -242,3 +244,55 @@ findConstraints si = map box constraints
               where
                 Reft (_, e) = sr_reft sreft
                 e' = (renameVar "v" s) e
+                
+-- | Maps all symbols in the Musfix info
+mapSymbols :: (MF.Id -> MF.Id) -> MF.MusfixInfo -> MF.MusfixInfo
+mapSymbols f mi = mi'
+  where
+    mi' = mi { MF.qualifiers = map mQuals $ MF.qualifiers mi,
+               MF.constants = map mConsts $ MF.constants mi,
+               MF.distincts = map mDistincts $ MF.distincts mi,
+               MF.functions = map mFuncs $ MF.functions mi,
+               MF.wfConstraints = map mWfCs $ MF.wfConstraints mi,
+               MF.constraints = map mConstraints $ MF.constraints mi }
+    
+    -- Map sorts
+    mSort (MF.TypeConS name srts) = MF.TypeConS (f name) (map mSort srts)
+    mSort s = s
+    
+    -- Map vars
+    mVar (MF.Var name srt) = MF.Var (f name) (mSort srt)
+    
+    -- Map expressions
+    mExpr (MF.SymbolExpr sym) = MF.SymbolExpr (f sym)
+    mExpr (MF.AppExpr e args) = MF.AppExpr (mExpr e) (map mExpr args)
+    
+    -- Map top levels
+    mQuals (MF.Qual name vars body) = MF.Qual (f name) (map mVar vars) (mExpr body)
+    mConsts (MF.Const name srt) = MF.Const (f name) (mSort srt)
+    mDistincts (MF.Distincts consts) = MF.Distincts $ map mConsts consts
+    mFuncs (MF.Func name args ret) = MF.Func (f name) (map mSort args) (mSort ret)
+    mWfCs (MF.WfC name args) = MF.WfC (f name) (map mVar args)
+    mConstraints (MF.HornC domain expr) = MF.HornC (map mVar domain) (mExpr expr)
+    
+replaceSymbols :: M.HashMap MF.Id MF.Id -> MF.MusfixInfo -> MF.MusfixInfo
+replaceSymbols m mi = mi'
+  where
+    mi' = mapSymbols f mi
+    f sym = M.lookupDefault sym sym m
+    
+-- | Escapes all known symbols
+escapeSymbols :: MF.MusfixInfo -> MF.MusfixInfo
+escapeSymbols mi = mi'
+  where
+    mi' = replaceSymbols mp mi
+    
+    mp = foldl escConsts M.empty (MF.constants mi)
+    
+    escConsts m (MF.Const name _)
+      | isUpper           = M.insert name safe m
+      | otherwise         = m
+      where
+        isUpper           = C.isUpper $ LT.head name
+        safe              = LT.cons '_' name
+        
