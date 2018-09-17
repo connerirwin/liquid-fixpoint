@@ -14,9 +14,7 @@ import Data.Semigroup
 import Data.Text.Format
 import Data.Text.Lazy.Builder (Builder)
 import qualified Data.HashMap.Strict    as M
-import qualified Data.Text.Lazy as LT
-
-import Debug.Trace 
+import qualified Data.Text.Lazy         as LT
 
 -- | TODO Prune unnecessary qualifiers and such
 ignoredFuncs :: [String]
@@ -74,55 +72,18 @@ sortedDomainWfC env wf = (vName, vSort) : map symSorts (envCs env $ wenv wf)
 sortedDomainSimpC :: BindEnv -> SimpC a -> [(Symbol, Sort)]
 sortedDomainSimpC binds c = lhsVars ++ rhsVars
   where
-    lhsVars = foldl srVar [] $ (traceShowId $ clhs binds c)
+    lhsVars = foldl srVar [] $(clhs binds c)
     rhsVars = []
     
-    srVar xs (name1, sreft) = a:b:xs
+    srVar xs (name1, sreft)
+      | (a `elem` xs) && (b `elem` xs) = xs
+      | a `elem` xs || b == a          = b:xs
+      | b `elem` xs                    = a:xs
+      | otherwise                      = a:b:xs
       where
         a = (name1, sr_sort sreft)
         b = (name2, sr_sort sreft)
         (Reft (name2, _)) = sr_reft sreft
-    
--- | Gets all variable symbols in an expression
-{--exprVars :: Expr -> [Symbol]
-exprVars e = M.keys $ f M.empty e
-  where
-    f :: M.HashMap Symbol Bool -> Expr -> M.HashMap Symbol Bool
-    f m (EVar s)        = M.insert s True m
-    f m (EApp a b)      = M.union (f m a) (f m b)
-    f m (ENeg a)        = f m a
-    f m (EBin _ l r)    = M.union (f m l) (f m r)
-    f m (EIte c t e)    = foldl M.union (f m c) [(f m t), (f m e)]
-    f m (ECst p _)      = f m p
-    f m (PAnd ps)       = foldl M.union $ map (f m) ps
-    f m (POr  ps)       = foldl M.union $ map (f m) ps
-    f m (PNot a)        = f m a
-    f m (PImp p q)      = M.union (f m p) (f m q)
-    f m (PIff p q)      = M.union (f m p) (f m q)
-    f m _               = m
-    --}
-
--- | Filters out redudant booleans in AND/OR expressions
-filterRedundantBools :: Expr -> Expr
-filterRedundantBools e      = mapExpr f e
-  where
-    f (PAnd xs)
-      | length xs' > 1      = PAnd xs'
-      | length xs == 0      = PTrue
-      | otherwise           = head xs
-      where
-        xs' = filter notTrue xs
-        notTrue PTrue = False
-        notTrue _     = True
-    f (POr xs)
-      | length xs' > 1      = POr xs'
-      | length xs == 0      = PFalse
-      | otherwise           = head xs
-      where
-        xs' = filter notFalse xs
-        notFalse PFalse     = False
-        notFalse _          = True
-    f e                     = e
 
 -- | Renames all occurances of the given variable
 renameVar :: String -> Symbol -> Expr -> Expr

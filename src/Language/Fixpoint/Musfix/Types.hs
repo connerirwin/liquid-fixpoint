@@ -46,7 +46,7 @@ data SortDecl = SortDecl Id Int
 data Expr = 
     SymbolExpr  Id
   | AppExpr     Expr [Expr]
-  deriving (Show)
+  deriving (Show, Eq)
   
 -- | Musfix sorted var
 data Var = Var Id Sort

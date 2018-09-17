@@ -26,7 +26,9 @@ symbolId s = LT.fromStrict $ FixpointTypes.symbolText s
 musfixInfo :: SInfo a -> MF.MusfixInfo
 musfixInfo si = mi'
   where
-    mi' = ( escapeVars .
+    mi' = ( removeRedundantBools .
+            removeUnusedReferences .
+            escapeVars .
             filterBuiltInSorts .
             removeApplyApps . 
             escapeGlobals . 
@@ -179,8 +181,9 @@ convertAppExpr e = MF.AppExpr rootExpr args
     collect _ ts     = ts
 
 convertKVar :: KVar -> Subst -> MF.Expr
-convertKVar k subst = MF.AppExpr (MF.SymbolExpr $ symbolId (kv k)) args
+convertKVar k subst = MF.AppExpr (MF.SymbolExpr $ name) args
   where
+    name = LT.append "$" (symbolId (kv k))
     (Su m) = subst
     argSort = sortBy (compare `on` fst)
     args = map (convertExpr . snd) (argSort (M.toList m))
@@ -264,7 +267,7 @@ findConstraints si = map box constraints
         
         isNotGlobalDef (s, _) = not $ hasGlobalDef si s
         sortedVar (s, srt) = MF.Var (symbolId s) (convertSort srt)
-        combinedRefts xs = convertExpr $ filterRedundantBools eAnds
+        combinedRefts xs = convertExpr eAnds
           where
             eAnds = PAnd $ map expr xs
             expr :: (Symbol, SortedReft) -> Expr
@@ -524,3 +527,43 @@ escapeVars mi = mi'
         replacements = foldl mapIfUpper M.empty domain
         domain' = map (replaceVarsV replacements) domain
         expr' = replaceVarsE replacements expr
+
+-- | Removes objects that are defined but not used
+-- Currently this is limited to horn constraint domains.
+removeUnusedReferences :: MF.MusfixInfo -> MF.MusfixInfo
+removeUnusedReferences mi = mi'
+  where
+    mi' = mi { MF.constraints = map mConstraints $ MF.constraints mi }
+    
+    mConstraints (MF.HornC domain expr) = MF.HornC domain' expr
+      where
+        domain' = filter (refsVar expr) domain
+        
+    refsVar e (MF.Var name _) = hasSym name e
+    
+    hasSym :: MF.Id -> MF.Expr -> Bool
+    hasSym sym (MF.SymbolExpr s) = (s == sym)
+    hasSym sym (MF.AppExpr e args) = foldl f False (e:args)
+      where
+        f r e = r || (hasSym sym e)
+        
+-- | Removes redundant booleans in and/or expressions
+removeRedundantBools :: MF.MusfixInfo -> MF.MusfixInfo
+removeRedundantBools mi = mi'
+  where
+    mi' = mi {
+      MF.qualifiers = map mQuals $ MF.qualifiers mi,
+      MF.constraints = map mConstraints $ MF.constraints mi
+    }
+    
+    mExpr (MF.AppExpr (MF.SymbolExpr "and") [e1, e2])
+      | e1 == (MF.SymbolExpr "True")  = mExpr e2
+      | e2 == (MF.SymbolExpr "True")  = mExpr e1
+    mExpr (MF.AppExpr (MF.SymbolExpr "or") [e1, e2])
+      | e1 == (MF.SymbolExpr "False") = mExpr e2
+      | e2 == (MF.SymbolExpr "False") = mExpr e1
+    mExpr (MF.AppExpr e args)         = MF.AppExpr (mExpr e) (map mExpr args)
+    mExpr e                           = e
+    
+    mQuals (MF.Qual name vars body) = MF.Qual name vars $ mExpr body
+    mConstraints (MF.HornC domain expr) = MF.HornC domain $ mExpr expr

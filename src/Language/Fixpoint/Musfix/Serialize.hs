@@ -21,8 +21,8 @@ import qualified Data.Text.Lazy.Builder            as Builder
 import qualified Language.Fixpoint.Types           as LFP
 
 -- | Converts the given SInfo object into a MUSFix compatible string
-convertToMusFix :: LFP.SInfo a -> String
-convertToMusFix si = (LT.unpack (Builder.toLazyText (musfix $ musfixInfo si)))
+convertToMusFix :: LFP.SInfo a -> LT.Text
+convertToMusFix si = (Builder.toLazyText (musfix $ musfixInfo si))
       
 class MusfixExport a where
   -- | Produces a lazy text builder for the given type in musfix format

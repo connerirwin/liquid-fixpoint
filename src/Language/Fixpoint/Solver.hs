@@ -49,7 +49,7 @@ import           Control.DeepSeq
 
 -- Musfix export
 import           Language.Fixpoint.Musfix.Serialize
-import qualified Debug.Trace as DB
+import qualified Data.Text.Lazy.IO                    as LTIO
 
 ---------------------------------------------------------------------------
 -- | Solve an .fq file ----------------------------------------------------
@@ -214,10 +214,10 @@ solveNative' !cfg !fi0 = do
   res <- {-# SCC "Sol.solve" #-} Sol.solve cfg $!! si6
   -- rnf soln `seq` donePhase Loud "Solve2"
   --let stat = resStatus res
-  -- TODO: clean up super hacky export of (our?) SMT2
+  
+  -- TODO: clean up super hacky export of Musfix
   let musfixOutput = convertToMusFix si6
-  putStrLn musfixOutput
-  writeFile "lqfp2musfix.msmt" (DB.traceShow (symbolEnv cfg si6) musfixOutput)
+  LTIO.writeFile "lqfp2musfix.msmt" musfixOutput
   
   saveSolution cfg res
   -- when (save cfg) $ saveSolution cfg
