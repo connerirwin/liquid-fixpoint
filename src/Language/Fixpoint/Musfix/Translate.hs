@@ -65,9 +65,11 @@ builtInSorts = [ "Bool", "Int" ]
 convertSort :: Sort -> MF.Sort
 convertSort FInt          = MF.IntS
 convertSort (FVar n)      = MF.VarS $ LT.pack (show n)
+convertSort (FObj s)      = MF.TypeConS (LT.append "Obj_" $ symbolId s) []
 convertSort a@(FApp _ _)  = convertAppS a
 convertSort (FTC f)       = MF.TypeConS (symbolId (symbol f)) []
 convertSort (FAbs _ s)    = convertSort s
+convertSort (FFunc _ _)   = error "unexpected function sort"
 convertSort _             = error "unsupported sort"
 
 convertAppS :: Sort -> MF.Sort
@@ -281,17 +283,20 @@ addUninterpSorts :: MF.MusfixInfo -> MF.MusfixInfo
 addUninterpSorts mi = mi2
   where
     mi1 = mi {
-        MF.sorts = foldr dec [] lsfnd
+        MF.sorts = foldr dec [] $ M.toList fnd5
       }
-    mi2 = disambiguateTypeCons fnd2 mi1
+    mi2 = disambiguateTypeCons fnd5 mi1
     
     gls = globals mi
     
     fnd1 = foldl searchConstants M.empty (MF.constants mi)
     fnd2 = foldl searchFunctions fnd1 (MF.functions mi)
     fnd3 = foldl searchQualifiers fnd2 (MF.qualifiers mi)
+    fnd4 = foldl searchWfCs fnd3 (MF.wfConstraints mi)
+    fnd5 = foldl searchConstraints fnd4 (MF.constraints mi)
     
-    lsfnd = (M.toList fnd3)
+    -- currently expressions aren't searched, but so far nothing has come up 
+    -- as a constructor without a corresponding sort declaration elsewhere
     
     dec :: (MF.Id, [Int]) -> [MF.SortDecl] -> [MF.SortDecl]
     dec (name, nums) decls = foldr ((:) . d) decls nums
@@ -323,6 +328,8 @@ addUninterpSorts mi = mi2
         m1 = foldl searchSort m args
         m2 = searchSort m1 ret
     searchQualifiers m (MF.Qual _ vars _) = foldl searchVar m vars
+    searchWfCs m (MF.WfC _ args) = foldl searchVar m args
+    searchConstraints m (MF.HornC domain _) = foldl searchVar m domain
     
 -- | Disambiguates type constructors that take variable arguments
 disambiguateTypeCons :: M.HashMap MF.Id [Int] -> MF.MusfixInfo -> MF.MusfixInfo
