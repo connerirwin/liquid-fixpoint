@@ -26,7 +26,8 @@ symbolId s = LT.fromStrict $ FixpointTypes.symbolText s
 musfixInfo :: SInfo a -> MF.MusfixInfo
 musfixInfo si = mi'
   where
-    mi' = ( removeRedundantBools .
+    mi' = ( replaceEmptySets .
+            removeRedundantBools .
             removeUnusedReferences .
             escapeVars .
             filterBuiltInSorts .
@@ -59,7 +60,7 @@ primitiveTranslations = M.fromList [
                               ]
                               
 builtInSorts :: [MF.Id]
-builtInSorts = [ "Bool", "Int" ]
+builtInSorts = [ "Bool", "Int", "Set" ]
     
 -- | Gets the Musfix version of a given sort
 convertSort :: Sort -> MF.Sort
@@ -569,6 +570,22 @@ removeRedundantBools mi = mi'
     mExpr (MF.AppExpr (MF.SymbolExpr "or") [e1, e2])
       | e1 == (MF.SymbolExpr "False") = mExpr e2
       | e2 == (MF.SymbolExpr "False") = mExpr e1
+    mExpr (MF.AppExpr e args)         = MF.AppExpr (mExpr e) (map mExpr args)
+    mExpr e                           = e
+    
+    mQuals (MF.Qual name vars body) = MF.Qual name vars $ mExpr body
+    mConstraints (MF.HornC domain expr) = MF.HornC domain $ mExpr expr
+    
+-- | Replaces empty set constructors with literals
+replaceEmptySets :: MF.MusfixInfo -> MF.MusfixInfo
+replaceEmptySets mi = mi'
+  where
+    mi' = mi {
+      MF.qualifiers = map mQuals $ MF.qualifiers mi,
+      MF.constraints = map mConstraints $ MF.constraints mi
+    }
+    
+    mExpr (MF.AppExpr (MF.SymbolExpr "Set_empty") _) = MF.SymbolExpr "{}"
     mExpr (MF.AppExpr e args)         = MF.AppExpr (mExpr e) (map mExpr args)
     mExpr e                           = e
     
