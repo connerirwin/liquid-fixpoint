@@ -19,8 +19,27 @@ import qualified Data.HashMap.Strict            as M
 import qualified Data.Text.Lazy                 as LT
 import qualified Data.Char                      as C
 
+import Debug.Trace
+
+-- | Symbols that must be escaped in Musfix export
+safetyEscapes :: [(LT.Text, LT.Text)]
+safetyEscapes = [ 
+                  ("(",  "__LPAREN__")
+                , (")",  "__RPAREN__")
+                , ("/",   "__SLASH__")
+                , ("\\", "__BSLASH__")
+                , ("|",    "__PIPE__")
+                , (":",   "__COLON__")
+                , (",",   "__COMMA__")
+                , (" ",      "__SP__")
+                ]
+
 symbolId :: Symbol -> MF.Id
-symbolId s = LT.fromStrict $ FixpointTypes.symbolText s
+symbolId s = safeT
+  where
+    rawT   = LT.fromStrict $ FixpointTypes.symbolText s
+    safeT  = foldl esc rawT safetyEscapes
+    esc t (s, r) = LT.replace s r t
 
 -- | Converts the given SInfo into a MusfixInfo
 musfixInfo :: SInfo a -> MF.MusfixInfo
@@ -70,7 +89,7 @@ convertSort (FObj s)      = MF.TypeConS (LT.append "Obj_" $ symbolId s) []
 convertSort a@(FApp _ _)  = convertAppS a
 convertSort (FTC f)       = MF.TypeConS (symbolId (symbol f)) []
 convertSort (FAbs _ s)    = convertSort s
-convertSort (FFunc _ _)   = error "unexpected function sort"
+convertSort (FFunc _ _)   = trace "unexpected higher order function" MF.IntS
 convertSort _             = error "unsupported sort"
 
 convertAppS :: Sort -> MF.Sort
