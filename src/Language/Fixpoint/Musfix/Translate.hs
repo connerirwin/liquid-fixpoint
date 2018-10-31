@@ -22,7 +22,7 @@ import qualified Data.Char                      as C
 import Debug.Trace
 
 -- | Symbols that must be escaped in Musfix export
-safetyEscapes :: [(LT.Text, LT.Text)]
+safetyEscapes :: [(MF.Id, MF.Id)]
 safetyEscapes = [ 
                   ("(",  "__LPAREN__")
                 , (")",  "__RPAREN__")
@@ -33,19 +33,24 @@ safetyEscapes = [
                 , (",",   "__COMMA__")
                 , (" ",      "__SP__")
                 ]
+                
+safeSymbol :: MF.Id -> MF.Id
+safeSymbol s     = safeT
+  where
+    safeT        = foldl esc s safetyEscapes
+    esc t (s, r) = LT.replace s r t
 
 symbolId :: Symbol -> MF.Id
-symbolId s = safeT
+symbolId s = safeSymbol rawT
   where
     rawT   = LT.fromStrict $ FixpointTypes.symbolText s
-    safeT  = foldl esc rawT safetyEscapes
-    esc t (s, r) = LT.replace s r t
 
 -- | Converts the given SInfo into a MusfixInfo
 musfixInfo :: SInfo a -> MF.MusfixInfo
 musfixInfo si = mi'
   where
-    mi' = ( replaceEmptySets .
+    mi' = ( fixCurriedFunctions . 
+            replaceEmptySets .
             removeRedundantBools .
             removeUnusedReferences .
             escapeVars .
@@ -54,6 +59,7 @@ musfixInfo si = mi'
             escapeGlobals . 
             renameConstructorFuncs .
             addUninterpSorts . 
+            normalizeStrings .
             (replaceSymbols primitiveTranslations)) mi
     mi = MF.MusfixInfo {
       MF.qualifiers = findQualifiers si,
@@ -84,7 +90,7 @@ builtInSorts = [ "Bool", "Int", "Set" ]
 -- | Gets the Musfix version of a given sort
 convertSort :: Sort -> MF.Sort
 convertSort FInt          = MF.IntS
-convertSort (FVar n)      = MF.VarS $ LT.pack (show n)
+convertSort (FVar n)      = MF.VarS $ safeSymbol (LT.pack (show n))
 convertSort (FObj s)      = MF.TypeConS (LT.append "Obj_" $ symbolId s) []
 convertSort a@(FApp _ _)  = convertAppS a
 convertSort (FTC f)       = MF.TypeConS (symbolId (symbol f)) []
@@ -149,7 +155,7 @@ convertBrel rel = MF.SymbolExpr s
       _       -> "unknown_binary_relation"
 
 convertSymConst :: SymConst -> MF.Expr
-convertSymConst (SL t)       = MF.SymbolExpr $ LT.fromStrict t
+convertSymConst s            = MF.SymbolExpr $ symbolId (symbol s)
 
 convertConst :: Constant -> MF.Expr
 convertConst    (I i)        = MF.SymbolExpr $ LT.pack (show i)
@@ -185,22 +191,23 @@ convertAndOr op (a:b:xs) = MF.AppExpr (MF.SymbolExpr op) [convertExpr a, convert
 convertAndOr op _ = MF.AppExpr (MF.SymbolExpr "empty") [MF.SymbolExpr op]
 
 convertAppExpr :: Expr -> MF.Expr
-convertAppExpr e = MF.AppExpr rootExpr args
+convertAppExpr e = MF.AppExpr f fargs
   where
-    rootExpr = rootc e
-    args = collect e []
+    f       = leftExpr e
+    fargs   = collectArgs e []
     
-    rootc (EApp a _) = rootc a
-    rootc (EVar s)   = MF.SymbolExpr $ symbolId s
-    rootc (ECst e _) = rootc e
-    rootc _          = error "application in expression has no compatible leftmost expression"
+    leftExpr (EApp a _) = leftExpr a
+    leftExpr (EVar s)   = MF.SymbolExpr $ symbolId s
+    leftExpr (ECst e _) = leftExpr e
+    leftExpr _          = error "no first-order leftmost expression in application"
     
-    collect (EApp a b) ts = args
+    collectArgs (EApp a b) args = args'
       where
-        args  = collect a (rarg:ts)
+        args' = collectArgs a (rarg:args)
         rarg  = convertExpr b
-    collect (ECst e _ ) ts = collect e ts
-    collect _ ts     = ts
+    collectArgs (ECst e _) args = collectArgs e args
+    collectArgs (EVar _)   args = args
+    collectArgs e          args = trace ("unexpected argument expression " ++ (show e)) args
 
 convertKVar :: KVar -> Subst -> MF.Expr
 convertKVar k subst = MF.AppExpr (MF.SymbolExpr $ name) args
@@ -229,9 +236,13 @@ findConstants si = map box constLits
     
 -- | Find distinct constants in the given SInfo
 findDistincts :: SInfo a -> [MF.Distincts]
-findDistincts si = map box distinctLits
+findDistincts si = distincts'
   where
     distinctLits = groupBySorts $ toListSEnv (dLits si)
+    
+    distincts   = map box distinctLits
+    distincts'  = filter ifMult distincts
+    ifMult (MF.Distincts names) = if length names > 1 then True else False
     
     box (srt, names) = MF.Distincts $ map boxC names
       where
@@ -610,3 +621,40 @@ replaceEmptySets mi = mi'
     
     mQuals (MF.Qual name vars body) = MF.Qual name vars $ mExpr body
     mConstraints (MF.HornC domain expr) = MF.HornC domain $ mExpr expr
+    
+-- | Fix curried functions
+fixCurriedFunctions mi = mi'
+  where
+    mi' = mi {
+      MF.qualifiers = map mQuals $ MF.qualifiers mi,
+      MF.constraints = map mConstraints $ MF.constraints mi
+    }
+    
+    -- This is mostly handled by convertExpr, but some odd ones still come through
+    mExpr (MF.AppExpr (MF.AppExpr e1 a1) a2) = mExpr $ MF.AppExpr e1 (a1 ++ a2)
+    mExpr (MF.AppExpr e args)                = MF.AppExpr (mExpr e) (map mExpr args)
+    mExpr e = e 
+    
+    mQuals (MF.Qual name vars body) = MF.Qual name vars $ mExpr body
+    mConstraints (MF.HornC domain expr) = MF.HornC domain $ mExpr expr
+    
+-- | Remaps instances of Str to List Char
+normalizeStrings :: MF.MusfixInfo -> MF.MusfixInfo
+normalizeStrings mi = mi'
+  where
+    mi' = mi { MF.qualifiers = map mQuals $ MF.qualifiers mi,
+               MF.constants = map mConsts $ MF.constants mi,
+               MF.functions = map mFuncs $ MF.functions mi,
+               MF.wfConstraints = map mWfCs $ MF.wfConstraints mi,
+               MF.constraints = map mConstraints $ MF.constraints mi }
+    
+    mSort (MF.TypeConS "Str" []) = MF.TypeConS "List" [MF.TypeConS "Char" []]
+    mSort s = s
+    
+    mVar (MF.Var name sort) = MF.Var name (mSort sort)
+    mQuals (MF.Qual name vars expr) = MF.Qual name (map mVar vars) (mExpr expr)
+    mConsts (MF.Const name srt) = MF.Const name (mSort srt)
+    mFuncs (MF.Func name args ret) = MF.Func name (map mSort args) (mSort ret)
+    mWfCs (MF.WfC name vars) = MF.WfC name (map mVar vars)
+    mConstraints (MF.HornC domain expr) = MF.HornC (map mVar domain) (mExpr expr)
+    mExpr e = e
