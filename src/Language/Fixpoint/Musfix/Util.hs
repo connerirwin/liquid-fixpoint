@@ -8,7 +8,6 @@
 module Language.Fixpoint.Musfix.Util where
 
 import Language.Fixpoint.Types
-import Language.Fixpoint.Types.Visitor
 
 --import Data.Semigroup
 import Data.Text.Format
@@ -85,26 +84,18 @@ sortedDomainSimpC binds c = lhsVars ++ rhsVars
         b = (name2, sr_sort sreft)
         (Reft (name2, _)) = sr_reft sreft
 
--- | Renames all occurances of the given variable
-renameVar :: Symbol -> Symbol -> Expr -> Expr
-renameVar s s' e = mapExpr rv e
-  where
-    rv (EVar n)
-      | n == s              = EVar s'
-    rv e                    = e
-
 -- | Gets the name of a sort type constructor with respect to the number of arguments given
 appSortName :: Sort -> Maybe (Symbol, Int)
 appSortName s = sname 0 s
   where
     sname d (FApp a _) = sname (d + 1) a
-    sname d (FTC a) 
+    sname d (FTC a)
       | s `elem` prims = Nothing
       | otherwise      = Just ((symbol a), d)
       where
         s = symbolString $ symbol a
         prims = [ "Int", "Bool" ]
-    sname _ _ = Nothing    
+    sname _ _ = Nothing
 
 -- | Gets all uninterpreted sort constructors in a given sort
 constructorsInSort :: Sort -> [(Symbol, Int)]

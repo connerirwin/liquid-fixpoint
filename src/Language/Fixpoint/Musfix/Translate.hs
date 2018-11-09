@@ -287,27 +287,33 @@ findConstraints si = map box constraints
   where
     constraints = M.toList (cm si)
     
-    box (_, c) = MF.HornC vars $ MF.AppExpr (MF.SymbolExpr "=>") [lhs, rhs]
+    box (_, c) = MF.HornC vars $ MF.AppExpr (MF.SymbolExpr "=>") [lhsE, rhsE]
       where
-        lhs       = combinedRefts lhsRefts
-        rhs       = convertExpr $ crhs c
+        lhsE      = foldl1 (\x y -> MF.AppExpr (MF.SymbolExpr "and") [x, y]) $ map convertReft lhs
+        rhsE      = convertExpr $ crhs c
         
         binds     = bs si
-        lhsRefts  = clhs binds c
+        lhs       = clhs binds c
         domain    = (sortedDomainSimpC binds c)
         
         vars      = map sortedVar (filter isNotGlobalDef domain)
         
         isNotGlobalDef (s, _) = not $ hasGlobalDef si s
         sortedVar (s, srt) = MF.Var (symbolId s) (convertSort srt)
-        combinedRefts xs = convertExpr eAnds
+        
+        convertReft :: (Symbol, SortedReft) -> MF.Expr
+        convertReft (s, sreft) = mfExpr'
           where
-            eAnds = PAnd $ map expr xs
-            expr :: (Symbol, SortedReft) -> Expr
-            expr (s, sreft) = e'
-              where
-                Reft (sym, e) = sr_reft sreft
-                e' = (renameVar sym s) e
+            Reft (sym, e) = sr_reft sreft
+            mfExpr = convertExpr e
+            mfExpr' = (renameVar (symbolId sym) (symbolId s)) mfExpr
+            
+            -- | Renames all occurances of the given variable
+            renameVar :: MF.Id -> MF.Id -> MF.Expr -> MF.Expr
+            renameVar s s' (MF.AppExpr f args) = MF.AppExpr (renameVar s s' f) (map (renameVar s s') args)
+            renameVar s s' (MF.SymbolExpr se)
+              | se == s                        = MF.SymbolExpr s'
+            renameVar _ _ e                    = e
 
 -- | Adds uninterpreted sorts to the Musfix info based on contextual usage of what appear to be type constructors
 addUninterpSorts :: MF.MusfixInfo -> MF.MusfixInfo
