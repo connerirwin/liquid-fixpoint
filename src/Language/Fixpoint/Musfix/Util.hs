@@ -10,7 +10,7 @@ module Language.Fixpoint.Musfix.Util where
 import Language.Fixpoint.Types
 import Language.Fixpoint.Types.Visitor
 
-import Data.Semigroup
+--import Data.Semigroup
 import Data.Text.Format
 import Data.Text.Lazy.Builder (Builder)
 import qualified Data.HashMap.Strict    as M
@@ -86,11 +86,11 @@ sortedDomainSimpC binds c = lhsVars ++ rhsVars
         (Reft (name2, _)) = sr_reft sreft
 
 -- | Renames all occurances of the given variable
-renameVar :: String -> Symbol -> Expr -> Expr
+renameVar :: Symbol -> Symbol -> Expr -> Expr
 renameVar s s' e = mapExpr rv e
   where
     rv (EVar n)
-      | symbolString n == s = EVar s'
+      | n == s              = EVar s'
     rv e                    = e
 
 -- | Gets the name of a sort type constructor with respect to the number of arguments given

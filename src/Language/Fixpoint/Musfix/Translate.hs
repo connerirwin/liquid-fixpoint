@@ -23,7 +23,7 @@ import Debug.Trace
 
 -- | Symbols that must be escaped in Musfix export
 safetyEscapes :: [(MF.Id, MF.Id)]
-safetyEscapes = [ 
+safetyEscapes = [
                   ("(",  "__LPAREN__")
                 , (")",  "__RPAREN__")
                 , ("/",   "__SLASH__")
@@ -49,16 +49,16 @@ symbolId s = safeSymbol rawT
 musfixInfo :: SInfo a -> MF.MusfixInfo
 musfixInfo si = mi'
   where
-    mi' = ( fixCurriedFunctions . 
+    mi' = ( fixCurriedFunctions .
             replaceEmptySets .
             removeRedundantBools .
             removeUnusedReferences .
             escapeVars .
             filterBuiltInSorts .
-            removeApplyApps . 
-            escapeGlobals . 
+            removeApplyApps .
+            escapeGlobals .
             renameConstructorFuncs .
-            addUninterpSorts . 
+            addUninterpSorts .
             normalizeStrings .
             (replaceSymbols primitiveTranslations)) mi
     mi = MF.MusfixInfo {
@@ -73,7 +73,7 @@ musfixInfo si = mi'
     
 -- | Translations to specific Musfix types/symbols
 primitiveTranslations :: M.HashMap MF.Id MF.Id
-primitiveTranslations = M.fromList [ 
+primitiveTranslations = M.fromList [
                                 ("Set_cup",        "union")
                               , ("Set_cap",    "intersect")
                               , ("Set_Set",          "Set")
@@ -306,10 +306,10 @@ findConstraints si = map box constraints
             expr :: (Symbol, SortedReft) -> Expr
             expr (s, sreft) = e'
               where
-                Reft (_, e) = sr_reft sreft
-                e' = (renameVar "v" s) e
+                Reft (sym, e) = sr_reft sreft
+                e' = (renameVar sym s) e
 
--- | Adds uninterpreted sorts to the Musfix info based on contextual usage of what appear to be type constructors               
+-- | Adds uninterpreted sorts to the Musfix info based on contextual usage of what appear to be type constructors
 addUninterpSorts :: MF.MusfixInfo -> MF.MusfixInfo
 addUninterpSorts mi = mi2
   where
@@ -326,7 +326,7 @@ addUninterpSorts mi = mi2
     fnd4 = foldl searchWfCs fnd3 (MF.wfConstraints mi)
     fnd5 = foldl searchConstraints fnd4 (MF.constraints mi)
     
-    -- currently expressions aren't searched, but so far nothing has come up 
+    -- currently expressions aren't searched, but so far nothing has come up
     -- as a constructor without a corresponding sort declaration elsewhere
     
     dec :: (MF.Id, [Int]) -> [MF.SortDecl] -> [MF.SortDecl]
@@ -378,9 +378,9 @@ disambiguateTypeCons ms mi = mi'
     
     mSort (MF.TypeConS name srt) = MF.TypeConS name' (map mSort srt)
       where
-        name' = if nd name then 
+        name' = if nd name then
             LT.append name (LT.pack $ show (length srt))
-          else 
+          else
             name
     mSort s = s
     mVar (MF.Var name sort) = MF.Var name (mSort sort)
@@ -633,7 +633,7 @@ fixCurriedFunctions mi = mi'
     -- This is mostly handled by convertExpr, but some odd ones still come through
     mExpr (MF.AppExpr (MF.AppExpr e1 a1) a2) = mExpr $ MF.AppExpr e1 (a1 ++ a2)
     mExpr (MF.AppExpr e args)                = MF.AppExpr (mExpr e) (map mExpr args)
-    mExpr e = e 
+    mExpr e = e
     
     mQuals (MF.Qual name vars body) = MF.Qual name vars $ mExpr body
     mConstraints (MF.HornC domain expr) = MF.HornC domain $ mExpr expr
