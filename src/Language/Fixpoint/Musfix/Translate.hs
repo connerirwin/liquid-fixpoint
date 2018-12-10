@@ -11,6 +11,7 @@ module Language.Fixpoint.Musfix.Translate (
 
 import Language.Fixpoint.Types
 import Language.Fixpoint.Musfix.Util
+import Language.Fixpoint.Musfix.PrettyPrint
 import Data.Function
 import Data.List
 import qualified Language.Fixpoint.Types        as FixpointTypes
@@ -32,6 +33,7 @@ safetyEscapes = [
                 , (":",   "__COLON__")
                 , (",",   "__COMMA__")
                 , (" ",      "__SP__")
+                , ("'",       "__Q__")
                 ]
                 
 safeSymbol :: MF.Id -> MF.Id
@@ -49,7 +51,8 @@ symbolId s = safeSymbol rawT
 musfixInfo :: SInfo a -> MF.MusfixInfo
 musfixInfo si = mi'
   where
-    mi' = ( fixCurriedFunctions .
+    mi' = ( prettifyVars .
+            fixCurriedFunctions .
             replaceEmptySets .
             removeRedundantBools .
             removeUnusedReferences .
@@ -80,7 +83,7 @@ primitiveTranslations = M.fromList [
                               , ("Set_sng",          "Set")
                               , ("Set_mem",           "in")
                               , ("bool",            "Bool")
-                              , ("GHC.Types.Bool",  "Bool")
+                              --, ("GHC.Types.Bool",  "Bool")
                               , ("[]",              "List")
                               ]
                               
@@ -90,13 +93,15 @@ builtInSorts = [ "Bool", "Int", "Set" ]
 -- | Gets the Musfix version of a given sort
 convertSort :: Sort -> MF.Sort
 convertSort FInt          = MF.IntS
+convertSort FReal         = trace "unexpected real number; translating as Int" MF.IntS -- temporary
 convertSort (FVar n)      = MF.VarS $ safeSymbol (LT.pack (show n))
-convertSort (FObj s)      = MF.TypeConS (LT.append "Obj_" $ symbolId s) []
+--convertSort (FObj s)      = MF.TypeConS (LT.append "Obj_" $ symbolId s) []
+convertSort (FObj _)      = MF.IntS
 convertSort a@(FApp _ _)  = convertAppS a
 convertSort (FTC f)       = MF.TypeConS (symbolId (symbol f)) []
 convertSort (FAbs _ s)    = convertSort s
-convertSort (FFunc _ _)   = trace "unexpected higher order function" MF.IntS
-convertSort _             = error "unsupported sort"
+convertSort (FFunc _ _)   = trace "unexpected higher order function; translating as Int" MF.IntS
+convertSort a             = error $ "unsupported sort : " ++ (show a)
 
 convertAppS :: Sort -> MF.Sort
 convertAppS s = MF.TypeConS name args
@@ -107,7 +112,7 @@ convertAppS s = MF.TypeConS name args
     rootc (FApp a _) = rootc a
     rootc (FTC f)    = symbolId $ symbol f
     rootc (FVar n)   = LT.pack $ "@t" ++ (show n)
-    rootc _          = error "application in sort has no leftmost type constructor"
+    rootc _          = trace "application in sort has no leftmost type constructor; translating as Null" "Null"
     
     collect (FApp a b) ts = args
       where
@@ -451,6 +456,40 @@ replaceSymbols m mi = mi'
     mi' = mapSymbols f mi
     f sym = M.lookupDefault sym sym m
     
+-- | Maps symbols in the Musfix info using a hash map
+-- TODO: This is unnecessarily duplicative, better map function and type hierarchy would make this easier
+replaceSymbolsOutsideSorts :: M.HashMap MF.Id MF.Id -> MF.MusfixInfo -> MF.MusfixInfo
+replaceSymbolsOutsideSorts m mi = mi'
+  where
+    mi' = mapSymbols' f mi
+    f sym = M.lookupDefault sym sym m
+    
+    -- | Maps all symbols in the Musfix info
+    mapSymbols' :: (MF.Id -> MF.Id) -> MF.MusfixInfo -> MF.MusfixInfo
+    mapSymbols' f mi = mi'
+      where
+        mi' = mi { MF.qualifiers = map mQuals $ MF.qualifiers mi,
+                   MF.constants = map mConsts $ MF.constants mi,
+                   MF.distincts = map mDistincts $ MF.distincts mi,
+                   MF.functions = map mFuncs $ MF.functions mi,
+                   MF.wfConstraints = map mWfCs $ MF.wfConstraints mi,
+                   MF.constraints = map mConstraints $ MF.constraints mi }
+        
+        -- Map vars
+        mVar (MF.Var name srt) = MF.Var (f name) srt
+        
+        -- Map expressions
+        mExpr (MF.SymbolExpr sym) = MF.SymbolExpr (f sym)
+        mExpr (MF.AppExpr e args) = MF.AppExpr (mExpr e) (map mExpr args)
+        
+        -- Map top levels
+        mQuals (MF.Qual name vars body) = MF.Qual (f name) (map mVar vars) (mExpr body)
+        mConsts (MF.Const name srt) = MF.Const (f name) srt
+        mDistincts (MF.Distincts consts) = MF.Distincts $ map mConsts consts
+        mFuncs (MF.Func name args ret) = MF.Func (f name) args ret
+        mWfCs (MF.WfC name args) = MF.WfC (f name) (map mVar args)
+        mConstraints (MF.HornC domain expr) = MF.HornC (map mVar domain) (mExpr expr)
+    
 -- | Removes apply's from function applications
 -- | Currently apply's are filtered out, but it would be realitively easier to create a transformation that keeps them and replaces all functions with integer constants
 removeApplyApps :: MF.MusfixInfo -> MF.MusfixInfo
@@ -475,7 +514,7 @@ filterBuiltInSorts mi = mi'
       | name `elem` builtInSorts  = False
       | otherwise                 = True
       
--- | Fixes weird constructors that have the same name as their return sort
+-- | Fixes functions that have the same name as a sort
 renameConstructorFuncs :: MF.MusfixInfo -> MF.MusfixInfo
 renameConstructorFuncs mi = mi'
   where
@@ -491,11 +530,16 @@ renameConstructorFuncs mi = mi'
       | isCF f    = M.insert name name' m
       | otherwise = m
       where
-        name' = LT.append "_mk_" name
+        name' = LT.append "_f_" name
       
-    isCF (MF.Func name _ ret) = case ret of
-        (MF.TypeConS n srts) -> (length srts == 0) && name == n
-        _ -> False
+    isCF (MF.Func name _ _) = case el of
+          Just _  -> True
+          Nothing -> False
+      where
+        el = find matchingName $ MF.sorts mi
+        matchingName (MF.SortDecl n _)
+          | n == name     = True
+          | otherwise     = False
         
     renameE m (MF.AppExpr (MF.SymbolExpr name) as) = MF.AppExpr (MF.SymbolExpr name') (map (renameE m) as)
       where
@@ -517,7 +561,7 @@ renameConstructorFuncs mi = mi'
 escapeGlobals :: MF.MusfixInfo -> MF.MusfixInfo
 escapeGlobals mi = mi'
   where
-    mi' = replaceSymbols mp2 mi
+    mi' = replaceSymbolsOutsideSorts mp2 mi
     
     mp1 = foldl escConsts M.empty (MF.constants mi)
     mp2 = foldl escFuncs mp1 (MF.functions mi)
