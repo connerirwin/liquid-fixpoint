@@ -31,7 +31,6 @@ class MusfixExport a where
 instance MusfixExport MusfixInfo where
   musfix mi = build txt (txtSorts, txtConsts, txtDstnct, txtFuncs, txtQuals, txtWfCs, txtHorns)
     where
-      --txt = "; Uninterpreted Sorts\n{}{}\n\n; Constants\n{}\n\n; Distinct Constants\n{}\n\n; Uninterpreted Functions\n{}\n\n; Qualifiers\n{}  \n\n; Well-formedness Constraints\n{}\n\n; Horn Constraints\n{}"
       txt = "; Sorts\n{}\n\n; Constants\n{}\n\n{}\n\n; Uninterpreted Functions\n{}\n\n; Qualifiers\n{}\n\n; Well-formedness Constraints\n{}\n\n;  Constraints\n{}\n\n"
       txtSorts  = concatBuildersS "\n" $ map musfix (sorts mi)
       txtConsts = concatBuildersS "\n" $ map musfix (constants mi)

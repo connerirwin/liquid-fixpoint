@@ -93,10 +93,9 @@ builtInSorts = [ "Bool", "Int", "Set" ]
 -- | Gets the Musfix version of a given sort
 convertSort :: Sort -> MF.Sort
 convertSort FInt          = MF.IntS
-convertSort FReal         = trace "unexpected real number; translating as Int" MF.IntS -- temporary
+convertSort FReal         = trace "unexpected real number; translating as Int" MF.IntS
 convertSort (FVar n)      = MF.VarS $ safeSymbol (LT.pack (show n))
---convertSort (FObj s)      = MF.TypeConS (LT.append "Obj_" $ symbolId s) []
-convertSort (FObj _)      = MF.IntS
+convertSort (FObj s)      = MF.TypeConS (LT.append "Obj_" $ symbolId s) []
 convertSort a@(FApp _ _)  = convertAppS a
 convertSort (FTC f)       = MF.TypeConS (symbolId (symbol f)) []
 convertSort (FAbs _ s)    = convertSort s
